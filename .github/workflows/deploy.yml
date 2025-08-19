@@ -38,8 +38,8 @@ jobs:
       # ✅ Run migrations; Prisma validates schema and needs BOTH envs defined
       - name: Prisma migrate deploy (Supabase)
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}   # pooled (6543)
           DIRECT_URL:   ${{ secrets.DIRECT_URL }}     # direct (5432)
+          DATABASE_URL: ${{ secrets.DIRECT_URL }}     # <- override pooled with direct
         run: npx prisma migrate deploy
 
   vercel-deploy:
