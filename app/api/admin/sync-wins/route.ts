@@ -10,6 +10,10 @@ const KNOWN = new Set([
   "ATL","CAR","NO","TB","ARI","LA","SF","SEA"
 ]);
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export async function POST(req: Request) {
   // 1) Gate behind feature flag + admin token
   if (process.env.WINS_AUTO_SYNC_ENABLED !== "true") {
