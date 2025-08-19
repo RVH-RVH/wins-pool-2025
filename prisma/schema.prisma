@@ -1,0 +1,72 @@
+// prisma/schema.prisma
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")   // pooled URL (6543)
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model League {
+  id             String   @id @default(cuid())
+  code           String   @unique
+  name           String
+  teamsPerPlayer Int      @map("teams_per_player")
+  snake          Boolean
+  createdAt      DateTime @default(now()) @map("created_at")
+  createdBy      String?  @map("created_by")
+  players        Player[]
+  picks          Pick[]
+  wins           TeamWin[]
+
+  @@map("league")
+}
+
+model Player {
+  id       String  @id @default(cuid())
+  leagueId String  @map("league_id")
+  name     String
+  order    Int     @map("order")
+  userId   String? @map("user_id")
+  league   League  @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  picks    Pick[]
+
+  @@unique([leagueId, order])
+  @@map("player")
+}
+
+model Pick {
+  id         String @id @default(cuid())
+  leagueId   String @map("league_id")
+  playerId   String @map("player_id")
+  teamId     String @map("team_id")
+  pickNumber Int    @map("pick_number")
+  league     League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  player     Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([leagueId, pickNumber])
+  @@map("pick")
+}
+
+model TeamWin {
+  leagueId String @map("league_id")
+  teamId   String @map("team_id")
+  wins     Int
+  league   League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  @@id([leagueId, teamId])
+  @@map("team_win")
+}
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("User")
+}
+
+
