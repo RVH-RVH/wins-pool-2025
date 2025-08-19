@@ -9,9 +9,14 @@ import { emitLeagueUpdate } from "@/lib/pusher"; // ← switched from events to 
 
 export async function GET(_: Request, { params }: { params: { id: string } }) {
   const id = params.id;
-  const league = await prisma.league.findUnique({
-    where: { id },
-    include: {
+  const league = await prisma.league.findFirst({
+    where: {
+    OR: [
+      { id: id },
+      { code: id },
+    ],
+  },
+      include: {
       players: { orderBy: { order: "asc" } },
       picks: { orderBy: { pickNumber: "asc" } },
       wins: true,
