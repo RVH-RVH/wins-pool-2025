@@ -1,0 +1,67 @@
+name: Migrate DB + Deploy (Vercel)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: {}   # allows manual trigger
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: true
+
+jobs:
+  migrate:
+    name: Prisma migrate deploy (Supabase)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Align Prisma client
+        run: npx prisma generate
+
+      - name: Run DB migrations
+        env:
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: npx prisma migrate deploy
+
+  vercel-deploy:
+    name: Vercel Deploy (Production)
+    needs: migrate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      # Build locally to catch errors early (optional)
+      - name: Build
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: npm run build
+
+      - name: Deploy to Vercel (prod)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          # If your build or pre-render needs DB access, pass pooled URL:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: npx vercel --token "$VERCEL_TOKEN" --prod --confirm
+
