@@ -10,14 +10,17 @@ function useLeagueBase() {
 }
 
 export default function TopNav() {
-  const base = useLeagueBase();
-  const link = (p: string) => (base ? `${base}${p}` : p);
-
+  const key = process.env.DEFAULT_LEAGUE_KEY; // server component is fine
   return (
-    <nav className="flex gap-2">
-      <Link className="px-3 py-1.5 rounded-xl bg-slate-900 text-white" href={link("/draft")}>Draft</Link>
-      <Link className="px-3 py-1.5 rounded-xl bg-slate-100 border" href={link("/results")}>Results</Link>
-      <Link className="px-3 py-1.5 rounded-xl bg-slate-100 border" href={link("/players")}>Players</Link>
+    <nav className="flex gap-4 p-4 border-b">
+      <Link href="/">Home</Link>
+      {key && (
+        <>
+          <Link href={`/league/${encodeURIComponent(key)}/players`}>Players</Link>
+          <Link href={`/league/${encodeURIComponent(key)}/draft`}>Draft</Link>
+          <Link href={`/league/${encodeURIComponent(key)}/results`}>Results</Link>
+        </>
+      )}
     </nav>
   );
 }
