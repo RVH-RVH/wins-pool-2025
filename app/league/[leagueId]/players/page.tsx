@@ -10,21 +10,27 @@ type ApiLeagueResp = {
   players: Array<{ id: string; name: string; order: number; userId: string | null }>;
 };
 
-async function getLeague(leagueKey: string) {
-  // Use a RELATIVE fetch so it works in prod and dev without NEXTAUTH_URL
-  const res = await fetch(`/api/leagues/${encodeURIComponent(leagueKey)}`, {
+import { headers } from "next/headers";
+
+async function getBaseUrl() {
+  // Use NEXTAUTH_URL if defined (Vercel best practice)
+  if (process.env.NEXTAUTH_URL) return process.env.NEXTAUTH_URL;
+
+  // Otherwise build it dynamically from the request headers
+  const h = headers();
+  const host = h.get("host")!;
+  const proto = process.env.NODE_ENV === "development" ? "http" : "https";
+  return `${proto}://${host}`;
+}
+
+async function getLeague(leagueId: string) {
+  const baseUrl = await getBaseUrl();
+  const res = await fetch(`${baseUrl}/api/leagues/${leagueId}`, {
     cache: "no-store",
   });
 
-  if (res.status === 404) return null;
-  if (!res.ok) {
-    console.error("Failed to fetch league", leagueKey, res.status);
-    throw new Error(`Fetch failed: ${res.status}`);
-  }
-
-  const data = (await res.json()) as ApiLeagueResp | null;
-  if (!data?.league) return null;
-  return data;
+  if (!res.ok) throw new Error("League not found");
+  return res.json();
 }
 
 export default async function PlayersPage({ params }: { params: { leagueId?: string } }) {
