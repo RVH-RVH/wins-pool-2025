@@ -6,6 +6,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+
 // -------- GET: load league (id or code) --------
 export async function GET(_: Request, { params }: { params: { id: string } }) {
   const key = params.id;
