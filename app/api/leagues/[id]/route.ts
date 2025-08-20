@@ -6,47 +6,25 @@ import { prisma } from "@/lib/db";
 import { emitLeagueUpdate } from "@/lib/pusher"; // ← switched from events to pusher
 
 
-
 export async function GET(_: Request, { params }: { params: { id: string } }) {
   const id = params.id;
-  const league = await prisma.league.findFirst({
-    where: {
-    OR: [
-      { id: id },
-      { code: id },
-    ],
-  },
-      include: {
-      players: { orderBy: { order: "asc" } },
-      picks: { orderBy: { pickNumber: "asc" } },
-      wins: true,
-    },
-  });
+  const league =
+    (await prisma.league.findUnique({ where: { id: id } })) ??
+    (await prisma.league.findUnique({ where: { code: id } }));
   if (!league) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-  return NextResponse.json({
-    league: {
-      id: league.id,
-      name: league.name,
-      teamsPerPlayer: league.teamsPerPlayer,
-      snake: league.snake,
-    },
-    players: league.players.map((p) => ({
-      id: p.id,
-      name: p.name,
-      order: p.order,
-      userId: p.userId,
-    })),
-    picks: league.picks.map((p) => ({
-      id: p.id,
-      teamId: p.teamId,
-      playerId: p.playerId,
-      pickNumber: p.pickNumber,
-    })),
-    teamWins: Object.fromEntries(league.wins.map((w) => [w.teamId, w.wins])) as Record<
-      string,
-      number
-    >,
+  const [players, picks, wins] = await Promise.all([
+    prisma.player.findMany({ where: { leagueId: league.id }, orderBy: { order: "asc" } }),
+    prisma.pick.findMany({ where: { leagueId: league.id }, orderBy: { pickNumber: "asc" } }),
+    prisma.teamWin.findMany({ where: { leagueId: league.id } }),
+  ]);
+  if (!league) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+   return NextResponse.json({
+    league: { id: league.id, code: league.code, name: league.name, teamsPerPlayer: league.teamsPerPlayer, snake: league.snake },
+    players: players.map(p => ({ id: p.id, name: p.name, order: p.order, userId: p.userId })),
+    picks,
+    teamWins: Object.fromEntries(wins.map(w => [w.teamId, w.wins])),
   });
 }
 
