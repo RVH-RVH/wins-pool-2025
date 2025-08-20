@@ -1,9 +1,12 @@
-// app/league/[leagueId]/players/page.tsx
 import PlayersForm from "@/components/PlayersForm";
+import { prisma } from "@/lib/db";
 import { notFound } from "next/navigation";
 
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+
+// Removed duplicate default export function playerspage
 
 type ApiLeagueResp = {
   league: { id: string; code?: string; name: string; teamsPerPlayer?: number; snake?: boolean };
@@ -33,21 +36,26 @@ async function getLeague(leagueId: string) {
   return res.json();
 }
 
-export default async function PlayersPage({ params }: { params: { leagueId?: string } }) {
-  const leagueKey = params.leagueId;
-  if (!leagueKey) {
-    console.error("Missing leagueId param");
-    return notFound();
-  }
+export default async function PlayersPage({ params }: { params: { leagueId: string } }) {
+  const key = params.leagueId;
 
-  const data = await getLeague(leagueKey);
-  if (!data) return notFound();
+  const league =
+    (await prisma.league.findUnique({ where: { id: key } })) ??
+    (await prisma.league.findUnique({ where: { code: key } }));
+
+  if (!league) return notFound();
+
+  const players = await prisma.player.findMany({
+    where: { leagueId: league.id },
+    orderBy: { order: "asc" },
+  });
 
   return (
     <div className="p-6 max-w-2xl mx-auto space-y-6">
-      <h1 className="text-2xl font-bold">{data.league.name}</h1>
-      <PlayersForm leagueId={leagueKey} initialPlayers={data.players} />
+      <h1 className="text-2xl font-bold">{league.name}</h1>
+      <PlayersForm leagueId={key} initialPlayers={players.map(p => ({
+        id: p.id, name: p.name, order: p.order, userId: p.userId
+      }))} />
     </div>
   );
 }
-
