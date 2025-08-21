@@ -1,39 +1,31 @@
+// components/Nav.tsx
 "use client";
+
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-interface LeagueNavProps {
-  leagueId: string;
-  leagueCode?: string | null;
-}
-
-const tabs = [
-  { slug: "players", label: "Players" },
-  { slug: "draft", label: "Draft" },
-  { slug: "results", label: "Results" },
-];
-
-export default function LeagueNav({ leagueId, leagueCode }: LeagueNavProps) {
+export default function Nav({ leagueKey }: { leagueKey: string }) {
   const pathname = usePathname();
-  // Use code if it exists, otherwise fallback to id
-  const key = leagueCode ?? leagueId;
-
-  
+  const K = encodeURIComponent(leagueKey);
+  const items = [
+    { href: `/league/${K}/players`, label: "Players" },
+    { href: `/league/${K}/draft`,   label: "Draft" },
+    { href: `/league/${K}/results`, label: "Results" },
+  ];
 
   return (
-    <nav className="flex space-x-4 border-b pb-2">
-      {tabs.map((tab) => {
-        const href = `/league/${encodeURIComponent(key)}/${tab.slug}`;
-        const isActive = pathname === href;
+    <nav className="flex gap-3 border-b pb-2">
+      {items.map((it) => {
+        const active = pathname === it.href;
         return (
           <Link
-            key={tab.slug}
-            href={href}
+            key={it.href}
+            href={it.href}
             className={`px-3 py-1 rounded ${
-              isActive ? "bg-blue-600 text-white" : "text-blue-600 hover:bg-blue-100"
+              active ? "bg-blue-600 text-white" : "text-blue-600 hover:bg-blue-100"
             }`}
           >
-            {tab.label}
+            {it.label}
           </Link>
         );
       })}
