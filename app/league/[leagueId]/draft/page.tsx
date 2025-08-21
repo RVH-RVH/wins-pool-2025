@@ -1,31 +1,11 @@
-// app/league/[leagueId]/draft/page.tsx
-import { notFound } from "next/navigation";
-import { getLeagueByKey } from "@/lib/league";
-import LeagueTabs from "@/components/LeagueTabs";
 import DraftBoard from "@/components/DraftBoard";
-import { prisma } from "@/lib/db";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
-export default async function DraftPage({ params }: { params: { leagueId: string } }) {
-  const key = params.leagueId;
-  const league = await getLeagueByKey(key);
-  if (!league) return notFound();
-
-  const [players, picks] = await Promise.all([
-    prisma.player.findMany({ where: { leagueId: league.id }, orderBy: { order: "asc" } }),
-    prisma.pick.findMany({ where: { leagueId: league.id }, orderBy: { pickNumber: "asc" } }),
-  ]);
-
-  const leagueKey = league.code ?? league.id;
-
+export default function LeagueDraftPage() {
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6">
-      <h1 className="text-3xl font-bold">{league.name}</h1>
-      <LeagueTabs leagueKey={leagueKey} />
-       </div>
+    <div className="space-y-2">
+      <LeagueCodeBanner />
+      <DraftBoard />
+    </div>
   );
 }
 

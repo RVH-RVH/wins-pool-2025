@@ -1,16 +1,12 @@
-// app/league/[leagueId]/players/page.tsx
-import { notFound } from "next/navigation";
-import { getLeagueByKey } from "@/lib/league";
-// import LeagueTabs from "@/components/LeagueTabs";
 import PlayersForm from "@/components/PlayersForm";
 import { prisma } from "@/lib/db";
+import { notFound } from "next/navigation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-
-// Removed duplicate code block referencing 'league' before definition
+// Removed duplicate default export function playerspage
 
 type ApiLeagueResp = {
   league: { id: string; code?: string; name: string; teamsPerPlayer?: number; snake?: boolean };
