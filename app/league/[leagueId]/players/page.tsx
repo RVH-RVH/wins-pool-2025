@@ -1,9 +1,7 @@
-// app/league/[leagueId]/players/page.tsx
 import TopNav from "@/components/TopNav";
 import Nav from "@/components/Nav";
 import PlayersForm from "@/components/PlayersForm";
 import { prisma } from "@/lib/db";
-import { getLeagueByKey } from "@/lib/league";
 import { notFound } from "next/navigation";
 
 export const runtime = "nodejs";
@@ -12,7 +10,12 @@ export const revalidate = 0;
 
 export default async function PlayersPage({ params }: { params: { leagueId: string } }) {
   const key = params.leagueId;
-  const league = await getLeagueByKey(key);
+
+  // Resolve league by id OR code
+  const league =
+    (await prisma.league.findUnique({ where: { id: key } })) ??
+    (await prisma.league.findUnique({ where: { code: key } }));
+
   if (!league) return notFound();
 
   const players = await prisma.player.findMany({
@@ -23,11 +26,14 @@ export default async function PlayersPage({ params }: { params: { leagueId: stri
   const leagueKey = league.code ?? league.id;
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-6">
+    <div>
       <TopNav />
-      <h1 className="text-3xl font-bold">{league.name}</h1>
-      <Nav leagueKey={leagueKey} />
-      <PlayersForm leagueId={leagueKey} initialPlayers={players} />
+      <main className="p-6 max-w-4xl mx-auto space-y-6">
+        <h1 className="text-3xl font-bold">{league.name}</h1>
+        <Nav leagueId={encodeURIComponent(leagueKey)} />
+        <PlayersForm leagueId={leagueKey} initialPlayers={players} />
+      </main>
     </div>
   );
 }
+

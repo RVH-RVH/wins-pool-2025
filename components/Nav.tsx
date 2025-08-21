@@ -4,28 +4,28 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-export default function Nav({ leagueKey }: { leagueKey: string }) {
+export default function Nav({ leagueId }: { leagueId: string }) {
   const pathname = usePathname();
-  const K = encodeURIComponent(leagueKey);
-  const items = [
-    { href: `/league/${K}/players`, label: "Players" },
-    { href: `/league/${K}/draft`,   label: "Draft" },
-    { href: `/league/${K}/results`, label: "Results" },
+
+  const links = [
+    { href: `/league/${leagueId}/players`, label: "Players" },
+    { href: `/league/${leagueId}/draft`, label: "Draft" },
+    { href: `/league/${leagueId}/results`, label: "Results" },
   ];
 
   return (
-    <nav className="flex gap-3 border-b pb-2">
-      {items.map((it) => {
-        const active = pathname === it.href;
+    <nav className="flex gap-6 border-b pb-2 mb-4">
+      {links.map((link) => {
+        const isActive = pathname === link.href;
         return (
           <Link
-            key={it.href}
-            href={it.href}
-            className={`px-3 py-1 rounded ${
-              active ? "bg-blue-600 text-white" : "text-blue-600 hover:bg-blue-100"
-            }`}
+            key={link.href}
+            href={link.href}
+            className={`${
+              isActive ? "font-bold border-b-2 border-blue-500" : "text-gray-600"
+            } pb-1`}
           >
-            {it.label}
+            {link.label}
           </Link>
         );
       })}
