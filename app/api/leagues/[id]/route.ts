@@ -141,10 +141,15 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         const entries = Object.entries(body.teamWins as Record<string, number>);
         for (const [teamId, wins] of entries) {
           const val = Number.isFinite(+wins) ? Math.max(0, Math.min(20, +wins)) : 0;
-          await tx.teamWin.update({
-            where: { leagueId_teamId: { leagueId, teamId } },
-            data: { wins: val },
-          });
+        await tx.teamWin.upsert({
+  where: { leagueId_teamId: { leagueId, teamId } },
+  update: { wins: val },
+  create: {
+    leagueId,
+    teamId,
+    wins: val,
+  },
+});
         }
       }
 
