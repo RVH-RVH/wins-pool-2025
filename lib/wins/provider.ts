@@ -30,14 +30,16 @@ export class EspnProvider implements WinsProvider {
     });
 
     if (!res.ok) throw new Error(`ESPN error ${res.status}`);
-    const data = await res.json();
-    const out: WinsMap = {};
+   const data = await res.json();
+console.log("📦 ESPN top-level keys:", Object.keys(data));
+console.dir(data, { depth: 2 });
 
-    const groups: any[] =
-      Array.isArray(data?.children) ? data.children :
-      Array.isArray(data?.standings?.groups) ? data.standings.groups :
-      [];
+const out: WinsMap = {};
 
+const groups: any[] =
+  Array.isArray(data?.children) ? data.children :
+  Array.isArray(data?.standings?.groups) ? data.standings.groups :
+  [];
     console.log(`📊 Parsing ${groups.length} ESPN groups...`);
 
     for (const g of groups) {
