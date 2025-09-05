@@ -60,10 +60,12 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
 
 // -------- PATCH: update league meta, players, picks (transaction) --------
 // app/api/leagues/[id]/route.ts (PATCH only)
-console.log("[PATCH] /api/leagues/%s env", key, envFingerprint());
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
-  const key = params.id;
+  const key = params.id;       
+console.log("[PATCH] /api/leagues/%s env", key, envFingerprint());
+
+
   let body: any = {};
 
   try {
