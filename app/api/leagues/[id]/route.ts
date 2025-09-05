@@ -76,20 +76,8 @@ const players = Array.isArray(body.players)
     }))
   : [];
 const incomingPlayers = players;
-if (players.length) {
-  // Delete existing players in this league
-  await prisma.player.deleteMany({ where: { leagueId } });
 
-  // Create new players
-  await prisma.player.createMany({
-    data: players.map((p: any) => ({
-      leagueId,
-      name: p.name,
-      order: p.order,
-      userId: p.userId,
-    })),
-  });
-}
+// Removed duplicate result declaration and transaction block
 
 
     // Normalize incoming picks
