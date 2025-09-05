@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic"; // <--- prevents build-time errors
 
 export async function GET() {
   const token = process.env.ADMIN_TOKEN;
-  const baseUrl = process.env.NEXTAUTH_URL || "https://nextjs-boilerplate-lzh4urelg-ryan-von-hoffs-projects.vercel.app";
+  const baseUrl = process.env.NEXTAUTH_URL || "https://nextjs-boilerplate-kappa-mauve-4rndq5xirr.vercel.app";
 
   try {
     const res = await fetch(`${baseUrl}/api/admin/sync-wins`, {
