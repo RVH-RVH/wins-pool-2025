@@ -47,10 +47,12 @@ export async function POST(req: Request) {
   const { season, week } = await req.json().catch(() => ({}));
   const year = Number.isFinite(+season) ? +season : new Date().getFullYear();
 
+  console.log("[CRON] starting sync", envFingerprint());
   // 3) Fetch wins from provider
   const provider = getWinsProvider();
   const latest = await provider.fetchWins({ season: year, week });
 
+console.log("[CRON] provider:", provider.name, "season:", year, "rawKeys:", Object.keys(latest).length);
   // 4) Build updates safely (clamp, ignore unknown teams)
   const updates = Object.entries(latest)
     .filter(([teamId]) => KNOWN.has(teamId))
@@ -58,45 +60,54 @@ export async function POST(req: Request) {
 
       console.log("[CRON] updates", updates.length, updates.slice(0, 5));
   if (process.env.WINS_AUTO_SYNC_DRY_RUN === "true") {
-    return NextResponse.json({ ok: true, dryRun: true, provider: provider.name, season: year, count: updates.length, updates }, { status: 200 });
+    return NextResponse.json({
+      ok: true,
+      dryRun: true,
+      provider: provider.name,
+      season: year,
+      count: updates.length,
+      env: envFingerprint(),
+      updates,
+    });
   }
 
   // 5) Apply to every league (single-season app); or filter by season if you add seasons
-  const leagues = await prisma.league.findMany({ select: { id: true } });
+const leagues = await prisma.league.findMany({ select: { id: true } });
+  let updated = 0, created = 0, failed = 0;
 
   for (const { id } of leagues) {
-  for (const { teamId, wins } of updates) {
-try {
-  console.log(`🔄 Updating ${teamId} for league ${id} to ${wins} wins`);
-  const result = await prisma.teamWin.update({
-    where: { leagueId_teamId: { leagueId: id, teamId } },
-    data: { wins },
-  });
-  console.log(`✅ Updated ${teamId}:`, result);
-} catch (err) {
-  console.warn(`⚠️ Update failed. Attempting create for ${teamId} in league ${id}`, err);
-  try {
-    const result = await prisma.teamWin.create({ data: { leagueId: id, teamId, wins } });
-    console.log(`➕ Created ${teamId}:`, result);
-  } catch (createErr) {
-    console.error(`❌ Create failed for ${teamId} in league ${id}`, createErr);
-  }
-}
+    for (const { teamId, wins } of updates) {
+      try {
+        await prisma.teamWin.update({
+          where: { leagueId_teamId: { leagueId: id, teamId } },
+          data: { wins },
+        });
+        updated++;
+      } catch (err) {
+        try {
+          await prisma.teamWin.create({ data: { leagueId: id, teamId, wins } });
+          created++;
+        } catch (e) {
+          console.error("❌ Create failed", { leagueId: id, teamId, wins, e });
+          failed++;
+        }
+      }
+    }
 
   await emitLeagueUpdate(id, { type: "wins-sync" });
   }
-console.log("[CRON] done summary", { updated, created, failed, leagues: leagues.length, ...envFingerprint() });
-  return NextResponse.json({ ok: true, provider: provider.name, season: year, count: updates.length }, { status: 200 });
-}
-}
-console.log("[CRON] provider:", provider.name, "season:", year, "updates:", updates.length);
-// after the loops:
+console.log("[CRON] done summary", {
+    updated, created, failed, leagues: leagues.length, ...envFingerprint(),
+  });
 
-return NextResponse.json({
-  ok: true,
-  provider: provider.name,
-  season: year,
-  count: updates.length,
-  updated, created, failed,
-  env: envFingerprint(), // echo in JSON for easy inspection
-});
+  return NextResponse.json({
+    ok: true,
+    provider: provider.name,
+    season: year,
+    count: updates.length,
+    updated,
+    created,
+    failed,
+    env: envFingerprint(),
+  });
+  }
