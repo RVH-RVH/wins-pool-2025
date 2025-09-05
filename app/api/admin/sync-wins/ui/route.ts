@@ -29,7 +29,7 @@ export async function POST(req: Request) {
   try { body = await req.json(); } catch {}
 
   // call the real admin route with server-side Authorization header
-  const res = await fetch(`${process.env.NEXTAUTH_URL || "http://localhost:3000"}/api/admin/sync-wins`, {
+  const res = await fetch(`${process.env.NEXTAUTH_URL || "https://nextjs-boilerplate-kappa-mauve-4rndq5xirr.vercel.app"}/api/admin/sync-wins`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
