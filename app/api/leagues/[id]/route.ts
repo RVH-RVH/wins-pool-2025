@@ -116,19 +116,29 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       });
 
       // Replace picks if any
-      if (rawPicks.length) {
-        const remappedPicks = rawPicks.map((p) => {
-          const order = players.find((pl: { name: string; order: number; userId: string | null }) => pl.userId === p.playerId || pl.name === p.playerId)?.order;
-          const newPlayerId = typeof order === "number" ? playerIdMap.get(order) ?? p.playerId : p.playerId;
-          return { teamId: p.teamId, playerId: newPlayerId, pickNumber: p.pickNumber };
-        });
+if (rawPicks.length) {
+  // Try to find the "matching" player based on order or userId
+  const remappedPicks = rawPicks.map((p) => {
+    const matched = players.find((pl: { name: string; order: number; userId: string | null }) => pl.userId === p.playerId || pl.name === p.playerId);
+    const newId = matched ? playerIdMap.get(matched.order) : undefined;
 
-        await tx.pick.deleteMany({ where: { leagueId } });
-        await tx.pick.createMany({
-          data: remappedPicks.map((p) => ({ ...p, leagueId })),
-          skipDuplicates: true,
-        });
-      }
+    if (!newId) {
+      throw new Error(`Could not remap playerId: ${p.playerId}`);
+    }
+
+    return {
+      teamId: p.teamId,
+      playerId: newId,
+      pickNumber: p.pickNumber,
+    };
+  });
+
+  await tx.pick.deleteMany({ where: { leagueId } });
+  await tx.pick.createMany({
+    data: remappedPicks.map((p) => ({ ...p, leagueId })),
+    skipDuplicates: true,
+  });
+}
 
       // Upsert teamWins
       for (const [teamId, wins] of Object.entries(teamWins as Record<string, number>)) {
