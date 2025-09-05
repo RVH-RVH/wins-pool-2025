@@ -46,9 +46,9 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
   const key = params.id;
   let body: any = {};
   try {
-    body = await req.json().catch(() => ({}));
+    body = await req.json();
 
-    // Resolve key -> canonical leagueId
+    // Find league by ID or code
     const league =
       (await prisma.league.findUnique({ where: { id: key } })) ??
       (await prisma.league.findUnique({ where: { code: key } }));
@@ -56,42 +56,37 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     if (!league) {
       return NextResponse.json({ ok: false, error: "League not found" }, { status: 404 });
     }
+
     const leagueId = league.id;
 
-    const name =
-      typeof body?.leagueName === "string" ? body.leagueName.slice(0, 100) : undefined;
+    const name = typeof body?.leagueName === "string" ? body.leagueName.slice(0, 100) : undefined;
     const teamsPerPlayer =
       Number.isFinite(+body?.teamsPerPlayer) ? Math.max(1, Math.min(10, +body.teamsPerPlayer)) : undefined;
     const snake = typeof body?.snake === "boolean" ? body.snake : undefined;
 
-    // Normalize incoming players (max 5)
-const MAX_PLAYERS = 5;
+    // Normalize players (force unique order)
+    const players = Array.isArray(body.players)
+      ? body.players.slice(0, 5).map((p: any, i: number) => ({
+          name: (p?.name || `Player ${i + 1}`).toString().slice(0, 80),
+          order: i,
+          userId: p?.userId ?? null,
+        }))
+      : [];
 
-const players = Array.isArray(body.players)
-  ? body.players.slice(0, MAX_PLAYERS).map((p: any, i: number) => ({
-      id: typeof p.id === "string" ? p.id : undefined,
-      name: (p?.name || `Player ${i + 1}`).toString().slice(0, 80),
-      order: i, // force unique order 0–4
-      userId: p?.userId ?? null,
-    }))
-  : [];
-const incomingPlayers = players;
-
-// Removed duplicate result declaration and transaction block
-
-
-    // Normalize incoming picks
-    const incomingPicks: Array<{ teamId: string; playerId: string; pickNumber: number }> =
+    // Normalize picks
+    const rawPicks: Array<{ teamId: string; playerId: string; pickNumber: number }> =
       Array.isArray(body?.picks)
-        ? (body.picks as any[]).map((p: any) => ({
+        ? body.picks.map((p: any) => ({
             teamId: String(p.teamId),
             playerId: String(p.playerId),
             pickNumber: Number(p.pickNumber) || 0,
           }))
         : [];
 
+    const teamWins = typeof body?.teamWins === "object" ? body.teamWins : {};
+
     const result = await prisma.$transaction(async (tx) => {
-      // Update league meta (if provided)
+      // Update league metadata
       if (name || teamsPerPlayer !== undefined || snake !== undefined) {
         await tx.league.update({
           where: { id: leagueId },
@@ -103,92 +98,59 @@ const incomingPlayers = players;
         });
       }
 
-      // Players: upsert + build id map
-      const existing = await tx.player.findMany({
-        where: { leagueId },
-        select: { id: true },
-      });
-      const existingIds = new Set(existing.map((p) => p.id));
+      // Replace players
+      await tx.player.deleteMany({ where: { leagueId } });
 
-      const idMap = new Map<string, string>(); // oldId -> newId
-
-      for (let i = 0; i < incomingPlayers.length; i++) {
-        const p = incomingPlayers[i];
-        if (p.id && existingIds.has(p.id)) {
-          const updated = await tx.player.update({
-            where: { id: p.id },
-            data: { name: p.name, order: p.order, userId: p.userId },
-            select: { id: true },
-          });
-          idMap.set(p.id, updated.id);
-        } else {
-          const created = await tx.player.create({
+      const createdPlayers = await Promise.all(
+        players.map((p: { name: string; order: number; userId: string | null }) =>
+          tx.player.create({
             data: { leagueId, name: p.name, order: p.order, userId: p.userId },
-            select: { id: true },
-          });
-          idMap.set(p.id ?? `__idx_${i}`, created.id);
-        }
-      }
+          })
+        )
+      );
 
-      // OPTIONAL strict sync: delete players not in payload
-      // const keepIds = new Set([...idMap.values()]);
-      // await tx.player.deleteMany({ where: { leagueId, id: { notIn: [...keepIds] } } });
+      // Build a map from order to new playerId
+      const playerIdMap = new Map<number, string>();
+      createdPlayers.forEach((p) => {
+        playerIdMap.set(p.order, p.id);
+      });
 
-      // Picks: validate player ownership, then replace all
-      if (incomingPicks.length) {
-        // Remap playerIds if client sent temp/old ids
-        const remapped = incomingPicks.map((p) => ({
-          teamId: p.teamId,
-          playerId: idMap.get(p.playerId) ?? p.playerId,
-          pickNumber: p.pickNumber,
-        }));
-
-        // Validate: all playerIds belong to this league
-        const playerIds = [...new Set(remapped.map((p) => p.playerId))];
-        const owners = await tx.player.findMany({
-          where: { id: { in: playerIds } },
-          select: { id: true, leagueId: true },
+      // Replace picks if any
+      if (rawPicks.length) {
+        const remappedPicks = rawPicks.map((p) => {
+          const order = players.find((pl: { name: string; order: number; userId: string | null }) => pl.userId === p.playerId || pl.name === p.playerId)?.order;
+          const newPlayerId = typeof order === "number" ? playerIdMap.get(order) ?? p.playerId : p.playerId;
+          return { teamId: p.teamId, playerId: newPlayerId, pickNumber: p.pickNumber };
         });
-        const badIds = new Set(
-          owners.filter((o) => o.leagueId !== leagueId).map((o) => o.id)
-        );
-        if (badIds.size) {
-          throw new Error(
-            `Invalid picks: some playerIds do not belong to league ${leagueId}: ${[...badIds].join(",")}`
-          );
-        }
 
         await tx.pick.deleteMany({ where: { leagueId } });
         await tx.pick.createMany({
-          data: remapped.map((p) => ({ ...p, leagueId })),
+          data: remappedPicks.map((p) => ({ ...p, leagueId })),
           skipDuplicates: true,
         });
       }
 
-      // Team wins (optional)
-      if (body?.teamWins && typeof body.teamWins === "object") {
-        const entries = Object.entries(body.teamWins as Record<string, number>);
-        for (const [teamId, wins] of entries) {
-          const val = Number.isFinite(+wins) ? Math.max(0, Math.min(20, +wins)) : 0;
-          await tx.teamWin.update({
-            where: { leagueId_teamId: { leagueId, teamId } },
-            data: { wins: val },
-          });
-        }
+      // Upsert teamWins
+      for (const [teamId, wins] of Object.entries(teamWins as Record<string, number>)) {
+        const val = Number.isFinite(+wins) ? Math.max(0, Math.min(20, +wins)) : 0;
+        await tx.teamWin.upsert({
+          where: { leagueId_teamId: { leagueId, teamId } },
+          update: { wins: val },
+          create: { leagueId, teamId, wins: val },
+        });
       }
 
-      return { leagueId, idMapSize: idMap.size };
+      return { ok: true };
     });
 
-    return NextResponse.json({ ok: true, ...result });
+    return NextResponse.json(result);
   } catch (err: any) {
     console.error("[PATCH /api/leagues/:id] error", {
-      key: params.id,
+      key,
       body,
       message: err?.message,
       stack: err?.stack,
     });
-    // Return a 400 with message so the client can show an inline error
     return NextResponse.json({ ok: false, error: err?.message ?? "Internal error" }, { status: 400 });
   }
 }
