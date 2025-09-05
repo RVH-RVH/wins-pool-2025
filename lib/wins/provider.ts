@@ -3,7 +3,7 @@ export type FetchOpts = { season?: number; week?: number };
 export interface WinsProvider { name: string; fetchWins(opts: FetchOpts): Promise<WinsMap>; }
 
 
-// Full ESPN abbreviation-to-app mapping
+// Hardcoded map from ESPN team abbreviations to internal 3-letter IDs
 const ESPN_TEAM_MAP: Record<string, string> = {
   ARI: "ari", ATL: "atl", BAL: "bal", BUF: "buf", CAR: "car",
   CHI: "chi", CIN: "cin", CLE: "cle", DAL: "dal", DEN: "den",
@@ -14,89 +14,83 @@ const ESPN_TEAM_MAP: Record<string, string> = {
   TEN: "ten", WSH: "wsh",
 };
 
-// Utility to convert ESPN abbr to internal ID
-export function normalizeTeamKey(abbr: string): string | undefined {
+function normalizeTeamKey(abbr: string): string | undefined {
   return ESPN_TEAM_MAP[abbr?.toUpperCase()];
 }
 
-// ESPN implementation
 export class EspnProvider implements WinsProvider {
   name = "espn";
 
   async fetchWins(_: FetchOpts): Promise<WinsMap> {
+    console.log("🌐 Fetching NFL standings from ESPN...");
+
+    const res = await fetch("https://site.api.espn.com/apis/site/v2/sports/football/nfl/standings", {
+      headers: { "User-Agent": "wins-pool/1.0" },
+      cache: "no-store",
+    });
+
+    if (!res.ok) throw new Error(`ESPN error ${res.status}`);
+    const data = await res.json();
     const out: WinsMap = {};
 
-    try {
-      console.log("🌐 Fetching NFL standings from ESPN...");
-      const res = await fetch("https://site.api.espn.com/apis/site/v2/sports/football/nfl/standings", {
-        headers: {
-          "User-Agent": "wins-pool/1.0",
-        },
-        cache: "no-store",
-      });
+    const groups: any[] =
+      Array.isArray(data?.children) ? data.children :
+      Array.isArray(data?.standings?.groups) ? data.standings.groups :
+      [];
 
-      if (!res.ok) {
-        console.error("❌ ESPN fetch failed with status:", res.status);
-        throw new Error(`ESPN error ${res.status}`);
-      }
+    console.log(`📊 Parsing ${groups.length} ESPN groups...`);
 
-      const data: any = await res.json();
-      const groups: any[] =
-        Array.isArray(data?.children) ? data.children :
-        Array.isArray(data?.standings?.groups) ? data.standings.groups :
-        [];
+    for (const g of groups) {
+      const entries = g?.standings?.entries || g?.entries || [];
+      for (const e of entries) {
+        const team = e?.team || {};
 
-      console.log(`📊 Parsing ${groups.length} ESPN groups...`);
+        // Defensive extraction of abbreviation
+        const abbr =
+          team.abbreviation ||
+          team.abbrev ||
+          team.shortDisplayName ||
+          team.displayName ||
+          team.name ||
+          "";
 
-      for (const g of groups) {
-        const entries = g?.standings?.entries || g?.entries || [];
+        const id = normalizeTeamKey(abbr);
+        if (!id) {
+          console.warn("⚠️ Unknown team abbreviation from ESPN:", abbr);
+          continue;
+        }
 
-        for (const e of entries) {
-          const team = e?.team || {};
-          const abbr = team.abbreviation || team.abbrev || team.shortDisplayName || "";
-          const id = normalizeTeamKey(abbr);
+        // Try to extract wins
+        const stats = Array.isArray(e?.stats) ? e.stats :
+                      Array.isArray(team?.record?.items) ? team.record.items : [];
 
-          if (!id) {
-            console.warn(`⚠️ Unknown team abbreviation from ESPN: "${abbr}"`);
-            continue;
+        let wins: number | undefined;
+
+        for (const s of stats) {
+          const name = (s?.name || s?.type || "").toString().toLowerCase();
+          if (name === "wins" || name === "overallwins" || name === "win") {
+            wins = Number(s?.value ?? s?.displayValue ?? s?.summary);
+            break;
           }
 
-          // Extract wins
-          const stats = Array.isArray(e?.stats)
-            ? e.stats
-            : Array.isArray(team?.record?.items)
-              ? team.record.items
-              : [];
-
-          let wins: number | undefined;
-
-          for (const s of stats) {
-            const name = (s?.name || s?.type || "").toString().toLowerCase();
-            if (["wins", "overallwins", "win"].includes(name)) {
-              wins = Number(s?.value ?? s?.displayValue ?? s?.summary);
-              break;
-            }
-
-            if (!wins && typeof s?.displayValue === "string" && s.displayValue.includes("-")) {
-              const m = s.displayValue.match(/^(\d+)-/);
-              if (m) wins = Number(m[1]);
-            }
-          }
-
-          if (wins == null && typeof e?.notes?.overall?.displayValue === "string") {
-            const m = e.notes.overall.displayValue.match(/^(\d+)-/);
+          // Parse "10-6" from display string
+          if (!wins && typeof s?.displayValue === "string" && s.displayValue.includes("-")) {
+            const m = s.displayValue.match(/^(\d+)-/);
             if (m) wins = Number(m[1]);
           }
-
-          out[id] = Math.max(0, Math.min(20, Number(wins ?? 0)));
         }
-      }
 
-      console.log("✅ Fetched win totals:", out);
-    } catch (err) {
-      console.error("💥 Failed to fetch wins from ESPN:", err);
+        // Fallback to record string
+        if (wins == null && typeof e?.notes?.overall?.displayValue === "string") {
+          const m = e.notes.overall.displayValue.match(/^(\d+)-/);
+          if (m) wins = Number(m[1]);
+        }
+
+        out[id] = Math.max(0, Math.min(20, Number(wins ?? 0)));
+      }
     }
 
+    console.log("✅ Fetched win totals:", out);
     return out;
   }
 }
