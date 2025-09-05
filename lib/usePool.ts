@@ -32,50 +32,44 @@ export function usePool() {
 
   const [state, setState] = useState<PoolState>(() => defaultState());
   const [playerIds, setPlayerIds] = useState<string[]>([]);
-  const [hydrated, setHydrated] = useState(false);
+ const [hydrated, setHydrated] = useState(false);
+const [bootstrapped, setBootstrapped] = useState(false);
+const suppressSaveRef = useRef(false);
   const savingRef = useRef(false);
+// load from server
+useEffect(() => {
+  if (!isServerMode) return;
+  let ignore = false;
+  suppressSaveRef.current = true;
+  fetchLeague(leagueId!).then((data) => {
+    if (ignore) return;
+    const sorted = [...data.players].sort((a,b) => a.order - b.order);
+    const newState: PoolState = {
+      leagueName: data.league.name,
+      players: sorted.map((p, i) => ({ id: `P${i+1}`, name: p.name })),
+      teamsPerPlayer: data.league.teamsPerPlayer,
+      picks: data.picks.map(p => ({ teamId: p.teamId, playerId: mapPlayerId(sorted, p.playerId), pickNumber: p.pickNumber })),
+      snake: data.league.snake,
+      teamWins: fillWins(data.teamWins),
+    };
+    setState(newState);
+    setPlayerIds(sorted.map(p => p.id));
+  }).catch(console.error).finally(() => {
+    suppressSaveRef.current = false;
+    setBootstrapped(true);
+  });
+  return () => { ignore = true; };
+}, [isServerMode, leagueId]);
 
-  // Load from server
-  useEffect(() => { setHydrated(true); }, []);
-  useEffect(() => {
-    if (!isServerMode && hydrated) {
-      const saved = loadState();
-      if (saved) setState(saved);
-    }
-  }, [isServerMode, hydrated]);
-
-
-      useEffect(() => {
-    if (!isServerMode) return;
-    let ignore = false;
-    fetchLeague(leagueId!).then((data) => {
-      if (ignore) return;
-      const sorted = [...data.players].sort((a,b) => a.order - b.order);
-      const newState: PoolState = {
-        leagueName: data.league.name,
-        players: sorted.map((p, i) => ({ id: `P${i+1}`, name: p.name })),
-        teamsPerPlayer: data.league.teamsPerPlayer,
-        picks: data.picks.map(p => ({ teamId: p.teamId, playerId: mapPlayerId(sorted, p.playerId), pickNumber: p.pickNumber })),
-        snake: data.league.snake,
-        teamWins: fillWins(data.teamWins),
-      };
-      setState(newState);
-      setPlayerIds(sorted.map(p => p.id));
-    }).catch(console.error);
-    return () => { ignore = true; };
-  }, [isServerMode, leagueId]);
-// Real-time subscription (SSE)
-  useEffect(() => {
-    if (!isServerMode && hydrated) saveState(state);
-  }, [isServerMode, hydrated, state]);
+// SSE: suppress autosave while applying server-pushed changes
 useEffect(() => {
   if (!isServerMode || !leagueId) return;
   const es = new EventSource(`/api/leagues/${leagueId}/events`);
   let timer: any;
   es.onmessage = () => {
-    // throttle refetch to avoid bursts
     clearTimeout(timer);
     timer = setTimeout(() => {
+      suppressSaveRef.current = true;
       fetchLeague(leagueId).then(data => {
         const sorted = [...data.players].sort((a,b) => a.order - b.order);
         const newState: PoolState = {
@@ -88,12 +82,33 @@ useEffect(() => {
         };
         setState(newState);
         setPlayerIds(sorted.map(p => p.id));
-      }).catch(console.error);
+      }).catch(console.error).finally(() => {
+        // small delay so dependent effects settle before autosave can run
+        setTimeout(() => { suppressSaveRef.current = false; }, 50);
+      });
     }, 250);
   };
-  es.onerror = () => { /* silently allow reconnect by browser */ };
+  es.onerror = () => {};
   return () => { try { es.close(); } catch {} };
 }, [isServerMode, leagueId]);
+
+// AUTOSAVE: only after bootstrapped, and never while suppressed
+useEffect(() => {
+  if (!isServerMode) return;
+  if (!bootstrapped) return;
+  if (suppressSaveRef.current) return;
+  // also: don't autosave if we don't have player row IDs yet
+  if (playerIds.length === 0 || state.players.length === 0) return;
+
+  const t = setTimeout(() => {
+    if (suppressSaveRef.current) return;
+    if (savingRef.current) return;
+    savingRef.current = true;
+    const payload = serializeForServer(state, playerIds);
+    saveLeague(leagueId!, payload).catch(console.error).finally(() => { savingRef.current = false; });
+  }, 600);
+  return () => clearTimeout(t);
+}, [isServerMode, leagueId, state, playerIds, bootstrapped]);
 // Local mode: persist to localStorage
 useEffect(() => {
   if (!isServerMode) saveState(state);

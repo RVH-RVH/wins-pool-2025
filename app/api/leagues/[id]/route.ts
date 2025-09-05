@@ -44,8 +44,6 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
 // -------- PATCH: update league meta, players, picks (transaction) --------
 // app/api/leagues/[id]/route.ts (PATCH only)
 
-
-
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const key = params.id;
   let body: any = {};
@@ -70,28 +68,41 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       : undefined;
     const snake = typeof body?.snake === "boolean" ? body.snake : undefined;
 
-    const incomingPlayers = Array.isArray(body?.players)
-      ? body.players.slice(0, 5).map((p: any, i: number) => ({
-          id: typeof p.id === "string" ? p.id : undefined,
-          name: (p?.name || `Player ${i + 1}`).toString().slice(0, 80),
-          order: i,
-          userId: p?.userId ?? null,
-        }))
-      : [];
+    // Players/picks may be omitted; only act if present & valid
+    const incomingPlayersRaw = Array.isArray(body?.players) ? body.players.slice(0, 5) : null;
+    const incomingPicksRaw   = Array.isArray(body?.picks)   ? body.picks               : null;
 
-    const incomingPicks = Array.isArray(body?.picks)
-      ? body.picks.map((p: any) => ({
-          teamId: String(p.teamId),
-          playerId: String(p.playerId),
-          pickNumber: Number(p.pickNumber) || 0,
-        }))
-      : [];
+    const incomingPlayers = incomingPlayersRaw?.map((p: any, i: number) => ({
+      id: typeof p?.id === "string" ? p.id : undefined,
+      name: (p?.name || `Player ${i + 1}`).toString().slice(0, 80),
+      order: i,
+      userId: p?.userId ?? null,
+    })) ?? [];
 
-    const incomingWins = typeof body?.teamWins === "object" ? body.teamWins : null;
+    const incomingPicks: Array<{ teamId: string; playerId: string; pickNumber: number }> =
+      incomingPicksRaw?.map((p: any) => ({
+        teamId: String(p.teamId),
+        playerId: String(p.playerId),
+        pickNumber: Number(p.pickNumber) || 0,
+      })) ?? [];
 
-    // Main transaction
+    const incomingWins = (body?.teamWins && typeof body.teamWins === "object")
+      ? (body.teamWins as Record<string, number>)
+      : null;
+
+    // 🔒 Heuristic: detect bootstrap/empty autosave & skip destructive writes
+    let skipPlayersAndPicks = false;
+    if (incomingPlayersRaw) {
+      const looksBootstrap =
+        incomingPlayers.length > 0 &&
+        incomingPlayers.every((p: any, i: number) => !p.id && p.name === `Player ${i + 1}`);
+      if (looksBootstrap) {
+        skipPlayersAndPicks = true;
+      }
+    }
+
     const result = await prisma.$transaction(async (tx) => {
-      // League meta
+      // League meta (non-destructive)
       if (name || teamsPerPlayer !== undefined || snake !== undefined) {
         await tx.league.update({
           where: { id: leagueId },
@@ -103,71 +114,68 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         });
       }
 
-      // Players (if provided)
+      // Players (only if provided AND not bootstrap)
       let idMap = new Map<string, string>();
-      if (incomingPlayers.length > 0) {
+      if (!skipPlayersAndPicks && incomingPlayersRaw && incomingPlayers.length > 0) {
         await tx.player.deleteMany({ where: { leagueId } });
 
-        const createdPlayers = await tx.player.createMany({
-          data: incomingPlayers.map((p: any) => ({
-            leagueId,
-            name: p.name,
-            order: p.order,
-            userId: p.userId,
-          })),
-          skipDuplicates: true,
-        });
-
-        // Get new IDs to rebuild map
-        const created = await tx.player.findMany({
-          where: { leagueId },
-          orderBy: { order: "asc" },
-        });
-        for (let i = 0; i < created.length; i++) {
-          const incoming = incomingPlayers[i];
-          const actual = created[i];
-          idMap.set(incoming.id ?? `__idx_${i}`, actual.id);
+        // Use create() in a loop so we get IDs reliably for mapping
+        for (const p of incomingPlayers) {
+          const created = await tx.player.create({
+            data: { leagueId, name: p.name, order: p.order, userId: p.userId },
+            select: { id: true, order: true },
+          });
+          idMap.set(p.id ?? `__idx_${p.order}`, created.id);
         }
       }
 
-      // Picks (if provided)
-      if (incomingPicks.length > 0) {
-        const remapped = incomingPicks.map((p: { teamId: string; playerId: string; pickNumber: number }) => {
+      // Picks (only if provided AND not bootstrap)
+      if (!skipPlayersAndPicks && incomingPicksRaw && incomingPicks.length > 0) {
+        // Remap playerIds if needed (when payload used temp IDs)
+        const remapped = incomingPicks.map((p) => {
           const mappedId = idMap.get(p.playerId) ?? p.playerId;
           if (!mappedId) throw new Error(`Could not remap playerId: ${p.playerId}`);
           return { ...p, playerId: mappedId };
         });
 
-        // Optional: validate that all remapped playerIds belong to this league
-        const playerIds = [...new Set(remapped.map((p: { teamId: string; playerId: string; pickNumber: number }) => p.playerId))] as string[];
-        const owners = await tx.player.findMany({
-          where: { id: { in: playerIds } },
-          select: { id: true, leagueId: true },
-        });
-        const badIds = owners.filter((o) => o.leagueId !== leagueId).map((o) => o.id);
-        if (badIds.length) {
-          throw new Error(`Invalid picks: player(s) not in league: ${badIds.join(",")}`);
+        // Validate: all playerIds belong to this league
+        const playerIds = [...new Set(remapped.map((p) => p.playerId))];
+        if (playerIds.length) {
+          const owners = await tx.player.findMany({
+            where: { id: { in: playerIds } },
+            select: { id: true, leagueId: true },
+          });
+          const badIds = new Set(owners.filter(o => o.leagueId !== leagueId).map(o => o.id));
+          if (badIds.size) {
+            throw new Error(`Invalid picks: player(s) not in league: ${[...badIds].join(",")}`);
+          }
         }
 
         await tx.pick.deleteMany({ where: { leagueId } });
         await tx.pick.createMany({
-          data: remapped.map((p: { teamId: string; playerId: string; pickNumber: number }) => ({ ...p, leagueId })),
+          data: remapped.map((p) => ({ ...p, leagueId })),
         });
       }
 
-      // Wins (if provided)
+      // 🏆 Wins: use UPSERT so rows are created if missing
       if (incomingWins) {
-        const entries = Object.entries(incomingWins as Record<string, number>);
-        for (const [teamId, wins] of entries) {
+        for (const [teamId, wins] of Object.entries(incomingWins)) {
           const val = Number.isFinite(+wins) ? Math.max(0, Math.min(20, +wins)) : 0;
-          await tx.teamWin.update({
+          await tx.teamWin.upsert({
             where: { leagueId_teamId: { leagueId, teamId } },
-            data: { wins: val },
+            update: { wins: val },
+            create: { leagueId, teamId, wins: val },
           });
         }
       }
 
-      return { ok: true, updatedLeagueId: leagueId };
+      return {
+        ok: true,
+        updatedLeagueId: leagueId,
+        playersAction: (!skipPlayersAndPicks && incomingPlayersRaw) ? "replaced" : "preserved",
+        picksAction:   (!skipPlayersAndPicks && incomingPicksRaw)   ? "replaced" : "preserved",
+        winsAction: !!incomingWins ? "upserted" : "skipped",
+      };
     });
 
     return NextResponse.json(result);
@@ -184,3 +192,4 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     );
   }
 }
+
