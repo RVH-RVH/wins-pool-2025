@@ -2,87 +2,105 @@ export type WinsMap = Record<string, number>;
 export type FetchOpts = { season?: number; week?: number };
 export interface WinsProvider { name: string; fetchWins(opts: FetchOpts): Promise<WinsMap>; }
 
-// ---- known teams + normalizer (same IDs your app uses) ----
-const KNOWN_TEAMS = new Set([
-  "BUF","MIA","NE","NYJ","BAL","CIN","CLE","PIT","HOU","IND","JAX","TEN",
-  "DEN","KC","LV","LAC","DAL","NYG","PHI","WAS","CHI","DET","GB","MIN",
-  "ATL","CAR","NO","TB","ARI","LA","SF","SEA",
-]);
 
+// Full ESPN abbreviation-to-app mapping
+const ESPN_TEAM_MAP: Record<string, string> = {
+  ARI: "ari", ATL: "atl", BAL: "bal", BUF: "buf", CAR: "car",
+  CHI: "chi", CIN: "cin", CLE: "cle", DAL: "dal", DEN: "den",
+  DET: "det", GB: "gb", HOU: "hou", IND: "ind", JAX: "jax",
+  KC: "kc", LV: "lv", LAC: "lac", LAR: "lar", MIA: "mia",
+  MIN: "min", NE: "ne", NO: "no", NYG: "nyg", NYJ: "nyj",
+  PHI: "phi", PIT: "pit", SF: "sf", SEA: "sea", TB: "tb",
+  TEN: "ten", WSH: "wsh",
+};
+
+// Utility to convert ESPN abbr to internal ID
 export function normalizeTeamKey(abbr: string): string | undefined {
-  const ESPN_TEAM_MAP: Record<string, string> = {
-    ARI: "ari", ATL: "atl", BAL: "bal", BUF: "buf", CAR: "car",
-    CHI: "chi", CIN: "cin", CLE: "cle", DAL: "dal", DEN: "den",
-    DET: "det", GB: "gb", HOU: "hou", IND: "ind", JAX: "jax",
-    KC: "kc", LV: "lv", LAC: "lac", LAR: "lar", MIA: "mia",
-    MIN: "min", NE: "ne", NO: "no", NYG: "nyg", NYJ: "nyj",
-    PHI: "phi", PIT: "pit", SF: "sf", SEA: "sea", TB: "tb",
-    TEN: "ten", WSH: "wsh",
-  };
   return ESPN_TEAM_MAP[abbr?.toUpperCase()];
 }
 
-// ---- Free ESPN provider (default) ----
+// ESPN implementation
 export class EspnProvider implements WinsProvider {
   name = "espn";
-  async fetchWins(_: FetchOpts): Promise<WinsMap> {
-    // Unofficial public JSON feed. Structure can change; code below is defensive.
-    const res = await fetch("https://site.api.espn.com/apis/site/v2/sports/football/nfl/standings", {
-      headers: { "User-Agent": "wins-pool/1.0" },
-      // ESPN doesn’t require headers, but UA helps some proxies
-      cache: "no-store",
-    });
-    if (!res.ok) throw new Error(`ESPN error ${res.status}`);
 
-    const data: any = await res.json();
+  async fetchWins(_: FetchOpts): Promise<WinsMap> {
     const out: WinsMap = {};
 
-    // Typical shape: data.children[] -> { name, standings: { entries: [...] } }
-    const groups: any[] =
-      Array.isArray(data?.children) ? data.children :
-      Array.isArray(data?.standings?.groups) ? data.standings.groups :
-      [];
+    try {
+      console.log("🌐 Fetching NFL standings from ESPN...");
+      const res = await fetch("https://site.api.espn.com/apis/site/v2/sports/football/nfl/standings", {
+        headers: {
+          "User-Agent": "wins-pool/1.0",
+        },
+        cache: "no-store",
+      });
 
-    for (const g of groups) {
-      const entries = g?.standings?.entries || g?.entries || [];
-      for (const e of entries) {
-        const team = e?.team || {};
-        const abbr = team.abbreviation || team.abbrev || team.shortDisplayName || "";
-        const id = normalizeTeamKey(abbr);
-        if (!id) continue;
+      if (!res.ok) {
+        console.error("❌ ESPN fetch failed with status:", res.status);
+        throw new Error(`ESPN error ${res.status}`);
+      }
 
-        // ESPN stats array; find wins by name
-        const stats = Array.isArray(e?.stats) ? e.stats :
-                      Array.isArray(team?.record?.items) ? team.record.items : [];
-        let wins: number | undefined;
+      const data: any = await res.json();
+      const groups: any[] =
+        Array.isArray(data?.children) ? data.children :
+        Array.isArray(data?.standings?.groups) ? data.standings.groups :
+        [];
 
-        // Try a few common shapes
-        for (const s of stats) {
-          const name = (s?.name || s?.type || "").toString().toLowerCase();
-          if (name === "wins" || name === "overallwins" || name === "win") {
-            wins = Number(s?.value ?? s?.displayValue ?? s?.summary);
-            break;
+      console.log(`📊 Parsing ${groups.length} ESPN groups...`);
+
+      for (const g of groups) {
+        const entries = g?.standings?.entries || g?.entries || [];
+
+        for (const e of entries) {
+          const team = e?.team || {};
+          const abbr = team.abbreviation || team.abbrev || team.shortDisplayName || "";
+          const id = normalizeTeamKey(abbr);
+
+          if (!id) {
+            console.warn(`⚠️ Unknown team abbreviation from ESPN: "${abbr}"`);
+            continue;
           }
-          // Some ESPN objects embed record like "10-6"
-          if (!wins && typeof s?.displayValue === "string" && s.displayValue.includes("-")) {
-            const m = s.displayValue.match(/^(\d+)-/);
+
+          // Extract wins
+          const stats = Array.isArray(e?.stats)
+            ? e.stats
+            : Array.isArray(team?.record?.items)
+              ? team.record.items
+              : [];
+
+          let wins: number | undefined;
+
+          for (const s of stats) {
+            const name = (s?.name || s?.type || "").toString().toLowerCase();
+            if (["wins", "overallwins", "win"].includes(name)) {
+              wins = Number(s?.value ?? s?.displayValue ?? s?.summary);
+              break;
+            }
+
+            if (!wins && typeof s?.displayValue === "string" && s.displayValue.includes("-")) {
+              const m = s.displayValue.match(/^(\d+)-/);
+              if (m) wins = Number(m[1]);
+            }
+          }
+
+          if (wins == null && typeof e?.notes?.overall?.displayValue === "string") {
+            const m = e.notes.overall.displayValue.match(/^(\d+)-/);
             if (m) wins = Number(m[1]);
           }
-        }
 
-        // Fallback: look for overall record string on team
-        if (wins == null && typeof e?.notes?.overall?.displayValue === "string") {
-          const m = e.notes.overall.displayValue.match(/^(\d+)-/);
-          if (m) wins = Number(m[1]);
+          out[id] = Math.max(0, Math.min(20, Number(wins ?? 0)));
         }
-
-        out[id] = Math.max(0, Math.min(20, Number(wins ?? 0)));
       }
+
+      console.log("✅ Fetched win totals:", out);
+    } catch (err) {
+      console.error("💥 Failed to fetch wins from ESPN:", err);
     }
 
     return out;
   }
 }
+
 
 // ---- Optional paid provider (kept) ----
 class SportsDataIOProvider implements WinsProvider {
