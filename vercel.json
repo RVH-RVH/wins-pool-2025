@@ -2,7 +2,8 @@
   "crons": [
     {
       "path": "/api/admin/sync-wins",
-      "schedule": "0 6 * * *"
+      "schedule": "0 6 * * *",
+      "method": "POST"
     }
   ]
 }
