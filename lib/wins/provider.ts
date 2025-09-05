@@ -1,6 +1,15 @@
 
 
 
+
+export function getWinsProvider(): WinsProvider {
+  const p = (process.env.WINS_PROVIDER ?? "espn").toLowerCase();
+  switch (p) {
+    // case "sportsdataio": return new SportsDataIOProvider();
+    case "espn":
+    default: return new EspnProvider();
+  }
+}
 export type WinsMap = Record<string, number>;
 export type FetchOpts = { season?: number; week?: number };
 export interface WinsProvider {
