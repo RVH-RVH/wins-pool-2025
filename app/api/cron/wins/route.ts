@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+const baseUrl = process.env.NEXTAUTH_URL || "https://nextjs-boilerplate-kappa-mauve-4rndq5xirr.vercel.app";
+const syncUrl = `${baseUrl}/api/admin/sync-wins`; // adjust if your file is not in /admin/
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
