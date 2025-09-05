@@ -1,8 +1,27 @@
+
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getWinsProvider } from "@/lib/wins/provider";
 import { emitLeagueUpdate } from "@/lib/pusher";
 
+
+// --- helper: log env + DB fingerprint safely ---
+function envFingerprint() {
+  const db = process.env.DATABASE_URL || "";
+  let host = "unknown", dbname = "unknown";
+  try {
+    const u = new URL(db.replace(/^prisma\+/, "")); // strip prisma+ if present
+    host = u.host;                 // e.g. xyz.supabase.co:5432
+    dbname = u.pathname.replace("/", "");
+  } catch {}
+  return {
+    vercelEnv: process.env.VERCEL_ENV,   // "production" | "preview" | "development"
+    nodeEnv: process.env.NODE_ENV,
+    dbHost: host,
+    dbName: dbname,
+    dryRun: process.env.WINS_AUTO_SYNC_DRY_RUN,
+  };
+}
 // Normalize to our internal 32 team IDs (already used across your app)
 const KNOWN = new Set([
   "BUF","MIA","NE","NYJ","BAL","CIN","CLE","PIT","HOU","IND","JAX","TEN",
@@ -37,6 +56,7 @@ export async function POST(req: Request) {
     .filter(([teamId]) => KNOWN.has(teamId))
     .map(([teamId, wins]) => ({ teamId, wins: Math.max(0, Math.min(20, Number(wins) || 0)) }));
 
+      console.log("[CRON] updates", updates.length, updates.slice(0, 5));
   if (process.env.WINS_AUTO_SYNC_DRY_RUN === "true") {
     return NextResponse.json({ ok: true, dryRun: true, provider: provider.name, season: year, count: updates.length, updates }, { status: 200 });
   }
@@ -65,7 +85,18 @@ try {
 
   await emitLeagueUpdate(id, { type: "wins-sync" });
   }
-
+console.log("[CRON] done summary", { updated, created, failed, leagues: leagues.length, ...envFingerprint() });
   return NextResponse.json({ ok: true, provider: provider.name, season: year, count: updates.length }, { status: 200 });
 }
 }
+console.log("[CRON] provider:", provider.name, "season:", year, "updates:", updates.length);
+// after the loops:
+
+return NextResponse.json({
+  ok: true,
+  provider: provider.name,
+  season: year,
+  count: updates.length,
+  updated, created, failed,
+  env: envFingerprint(), // echo in JSON for easy inspection
+});

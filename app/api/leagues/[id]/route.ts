@@ -1,4 +1,5 @@
 // app/api/leagues/[id]/route.ts
+
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 
@@ -6,6 +7,22 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+// --- helper: safe env/DB fingerprint (no secrets) ---
+function envFingerprint() {
+  const db = process.env.DATABASE_URL || "";
+  let host = "unknown", dbname = "unknown";
+  try {
+    const u = new URL(db.replace(/^prisma\+/, "")); // strip prisma+ if present
+    host = u.host;                 // e.g. xyz.supabase.co:5432
+    dbname = u.pathname.replace("/", "");
+  } catch {}
+  return {
+    vercelEnv: process.env.VERCEL_ENV,   // "production" | "preview" | "development"
+    nodeEnv: process.env.NODE_ENV,
+    dbHost: host,
+    dbName: dbname,
+  };
+}
 
 // -------- GET: load league (id or code) --------
 export async function GET(_: Request, { params }: { params: { id: string } }) {
@@ -43,6 +60,7 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
 
 // -------- PATCH: update league meta, players, picks (transaction) --------
 // app/api/leagues/[id]/route.ts (PATCH only)
+console.log("[PATCH] /api/leagues/%s env", key, envFingerprint());
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const key = params.id;
@@ -178,18 +196,19 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
       };
     });
 
-    return NextResponse.json(result);
+       console.log("[PATCH] done", { key, result, env: envFingerprint() });
+    return NextResponse.json({ ...result, env: envFingerprint() });
   } catch (err: any) {
     console.error("[PATCH /api/leagues/:id] error", {
       key,
       body,
       message: err?.message,
       stack: err?.stack,
+      env: envFingerprint(),
     });
     return NextResponse.json(
-      { ok: false, error: err?.message ?? "Internal server error" },
+      { ok: false, error: err?.message ?? "Internal server error", env: envFingerprint() },
       { status: 400 }
     );
   }
 }
-
