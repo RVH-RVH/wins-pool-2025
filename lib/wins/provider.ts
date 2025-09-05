@@ -21,7 +21,7 @@ function normalizeTeamKey(raw: string): string | null {
     TB: "TB", TAM: "TB",
     KC: "KC", KAN: "KC",
     LA: "LA", LAR: "LA",
-    LV: "LV", OAK: "LV", LVR: "LV",
+    LV: "LV", OAK: "LV", LVR: "LV", PHI: "PHI",
   };
   const v = map[k] ?? k;
   return KNOWN_TEAMS.has(v) ? v : null;
