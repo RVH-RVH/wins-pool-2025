@@ -42,13 +42,16 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
 }
 
 // -------- PATCH: update league meta, players, picks (transaction) --------
+// app/api/leagues/[id]/route.ts (PATCH only)
+
+
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const key = params.id;
   let body: any = {};
+
   try {
     body = await req.json();
 
-    // Find league by ID or code
     const league =
       (await prisma.league.findUnique({ where: { id: key } })) ??
       (await prisma.league.findUnique({ where: { code: key } }));
@@ -58,32 +61,31 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     }
 
     const leagueId = league.id;
-
     const name = typeof body?.leagueName === "string" ? body.leagueName.slice(0, 100) : undefined;
-    const teamsPerPlayer =
-      Number.isFinite(+body?.teamsPerPlayer) ? Math.max(1, Math.min(10, +body.teamsPerPlayer)) : undefined;
+    const teamsPerPlayer = Number.isFinite(+body?.teamsPerPlayer)
+      ? Math.max(1, Math.min(10, +body.teamsPerPlayer))
+      : undefined;
     const snake = typeof body?.snake === "boolean" ? body.snake : undefined;
 
-    // Normalize players (force unique order)
-    const players = Array.isArray(body.players)
-      ? body.players.slice(0, 5).map((p: any, i: number) => ({
+    // Normalize incoming players
+    const MAX_PLAYERS = 5;
+    const incomingPlayers = Array.isArray(body.players)
+      ? body.players.slice(0, MAX_PLAYERS).map((p: any, i: number) => ({
+          oldId: p?.id ?? `__idx_${i}`,
           name: (p?.name || `Player ${i + 1}`).toString().slice(0, 80),
-          order: i,
+          order: i, // enforce 0–4
           userId: p?.userId ?? null,
         }))
       : [];
 
-    // Normalize picks
-    const rawPicks: Array<{ teamId: string; playerId: string; pickNumber: number }> =
-      Array.isArray(body?.picks)
-        ? body.picks.map((p: any) => ({
-            teamId: String(p.teamId),
-            playerId: String(p.playerId),
-            pickNumber: Number(p.pickNumber) || 0,
-          }))
-        : [];
-
-    const teamWins = typeof body?.teamWins === "object" ? body.teamWins : {};
+    // Normalize incoming picks
+    const incomingPicks: Array<{ teamId: string; playerId: string; pickNumber: number }> = Array.isArray(body?.picks)
+      ? (body.picks as any[]).map((p: any) => ({
+          teamId: String(p.teamId),
+          playerId: String(p.playerId),
+          pickNumber: Number(p.pickNumber) || 0,
+        }))
+      : [];
 
     const result = await prisma.$transaction(async (tx) => {
       // Update league metadata
@@ -98,62 +100,58 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         });
       }
 
-      // Replace players
+      // Clear existing data
+      await tx.pick.deleteMany({ where: { leagueId } });
       await tx.player.deleteMany({ where: { leagueId } });
 
-      const createdPlayers = await Promise.all(
-        players.map((p: { name: string; order: number; userId: string | null }) =>
-          tx.player.create({
-            data: { leagueId, name: p.name, order: p.order, userId: p.userId },
-          })
-        )
-      );
-
-      // Build a map from order to new playerId
-      const playerIdMap = new Map<number, string>();
-      createdPlayers.forEach((p) => {
-        playerIdMap.set(p.order, p.id);
-      });
-
-      // Replace picks if any
-if (rawPicks.length) {
-  // Try to find the "matching" player based on order or userId
-  const remappedPicks = rawPicks.map((p) => {
-    const matched = players.find((pl: { name: string; order: number; userId: string | null }) => pl.userId === p.playerId || pl.name === p.playerId);
-    const newId = matched ? playerIdMap.get(matched.order) : undefined;
-
-    if (!newId) {
-      throw new Error(`Could not remap playerId: ${p.playerId}`);
-    }
-
-    return {
-      teamId: p.teamId,
-      playerId: newId,
-      pickNumber: p.pickNumber,
-    };
-  });
-
-  await tx.pick.deleteMany({ where: { leagueId } });
-  await tx.pick.createMany({
-    data: remappedPicks.map((p) => ({ ...p, leagueId })),
-    skipDuplicates: true,
-  });
-}
-
-      // Upsert teamWins
-      for (const [teamId, wins] of Object.entries(teamWins as Record<string, number>)) {
-        const val = Number.isFinite(+wins) ? Math.max(0, Math.min(20, +wins)) : 0;
-        await tx.teamWin.upsert({
-          where: { leagueId_teamId: { leagueId, teamId } },
-          update: { wins: val },
-          create: { leagueId, teamId, wins: val },
+      // Create players one by one and map old -> new id
+      const idMap = new Map<string, string>();
+      for (let i = 0; i < incomingPlayers.length; i++) {
+        const p = incomingPlayers[i];
+        const created = await tx.player.create({
+          data: {
+            leagueId,
+            name: p.name,
+            order: p.order,
+            userId: p.userId,
+          },
+          select: { id: true },
         });
+        idMap.set(p.oldId, created.id);
       }
 
-      return { ok: true };
+      // Re-map picks
+      if (incomingPicks.length) {
+        const remappedPicks = incomingPicks.map((p) => {
+          const newId = idMap.get(p.playerId);
+          if (!newId) throw new Error(`Could not remap playerId: ${p.playerId}`);
+          return {
+            leagueId,
+            teamId: p.teamId,
+            playerId: newId,
+            pickNumber: p.pickNumber,
+          };
+        });
+
+        await tx.pick.createMany({ data: remappedPicks });
+      }
+
+      // Team wins
+      if (body?.teamWins && typeof body.teamWins === "object") {
+        const entries = Object.entries(body.teamWins as Record<string, number>);
+        for (const [teamId, wins] of entries) {
+          const val = Number.isFinite(+wins) ? Math.max(0, Math.min(20, +wins)) : 0;
+          await tx.teamWin.update({
+            where: { leagueId_teamId: { leagueId, teamId } },
+            data: { wins: val },
+          });
+        }
+      }
+
+      return { leagueId, playersCreated: incomingPlayers.length, picksCreated: incomingPicks.length };
     });
 
-    return NextResponse.json(result);
+    return NextResponse.json({ ok: true, ...result });
   } catch (err: any) {
     console.error("[PATCH /api/leagues/:id] error", {
       key,
@@ -161,6 +159,7 @@ if (rawPicks.length) {
       message: err?.message,
       stack: err?.stack,
     });
+
     return NextResponse.json({ ok: false, error: err?.message ?? "Internal error" }, { status: 400 });
   }
 }

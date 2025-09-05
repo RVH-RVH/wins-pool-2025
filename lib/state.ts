@@ -21,7 +21,7 @@ export const STORAGE_KEY = "wins-pool-2025-v1";
  */
 export const CUSTOM_DRAFT_ORDER: Record<number, 1 | 2 | 3 | 4 | 5> = {
   // Player 1
-  1: 1, 10: 1, 12: 1, 20: 1, 24: 1,
+  1: 1, 10: 1, 12: 1, 20: 1, 24: 1, 26: 1,
   // Player 2
   2: 2, 9: 2, 14: 2, 16: 2, 23: 2, 29: 2,
   // Player 3
