@@ -45,19 +45,27 @@ export async function POST(req: Request) {
   const leagues = await prisma.league.findMany({ select: { id: true } });
 
   for (const { id } of leagues) {
-    for (const { teamId, wins } of updates) {
-      try {
-        await prisma.teamWin.update({
-          where: { leagueId_teamId: { leagueId: id, teamId } },
-          data: { wins },
-        });
-      } catch {
-        await prisma.teamWin.create({ data: { leagueId: id, teamId, wins } });
-      }
-    }
-    await emitLeagueUpdate(id, { type: "wins-sync" }); // fanout to clients
+  for (const { teamId, wins } of updates) {
+try {
+  console.log(`🔄 Updating ${teamId} for league ${id} to ${wins} wins`);
+  const result = await prisma.teamWin.update({
+    where: { leagueId_teamId: { leagueId: id, teamId } },
+    data: { wins },
+  });
+  console.log(`✅ Updated ${teamId}:`, result);
+} catch (err) {
+  console.warn(`⚠️ Update failed. Attempting create for ${teamId} in league ${id}`, err);
+  try {
+    const result = await prisma.teamWin.create({ data: { leagueId: id, teamId, wins } });
+    console.log(`➕ Created ${teamId}:`, result);
+  } catch (createErr) {
+    console.error(`❌ Create failed for ${teamId} in league ${id}`, createErr);
+  }
+}
+
+  await emitLeagueUpdate(id, { type: "wins-sync" });
   }
 
   return NextResponse.json({ ok: true, provider: provider.name, season: year, count: updates.length }, { status: 200 });
 }
-
+}
