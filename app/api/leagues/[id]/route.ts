@@ -65,15 +65,32 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     const snake = typeof body?.snake === "boolean" ? body.snake : undefined;
 
     // Normalize incoming players (max 5)
-    const incomingPlayers: Array<{ id?: string; name: string; order: number; userId: string | null }> =
-      Array.isArray(body?.players)
-        ? (body.players as any[]).slice(0, 5).map((p: any, i: number) => ({
-            id: typeof p.id === "string" ? p.id : undefined,
-            name: (p?.name || `Player ${i + 1}`).toString().slice(0, 80),
-            order: Number.isFinite(+p?.order) ? +p.order : i,
-            userId: p?.userId ?? null,
-          }))
-        : [];
+const MAX_PLAYERS = 5;
+
+const players = Array.isArray(body.players)
+  ? body.players.slice(0, MAX_PLAYERS).map((p: any, i: number) => ({
+      id: typeof p.id === "string" ? p.id : undefined,
+      name: (p?.name || `Player ${i + 1}`).toString().slice(0, 80),
+      order: i, // force unique order 0–4
+      userId: p?.userId ?? null,
+    }))
+  : [];
+const incomingPlayers = players;
+if (players.length) {
+  // Delete existing players in this league
+  await prisma.player.deleteMany({ where: { leagueId } });
+
+  // Create new players
+  await prisma.player.createMany({
+    data: players.map((p: any) => ({
+      leagueId,
+      name: p.name,
+      order: p.order,
+      userId: p.userId,
+    })),
+  });
+}
+
 
     // Normalize incoming picks
     const incomingPicks: Array<{ teamId: string; playerId: string; pickNumber: number }> =
