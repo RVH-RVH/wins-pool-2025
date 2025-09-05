@@ -28,7 +28,7 @@ function normalizeTeamKey(raw: string): string | null {
 }
 
 // ---- Free ESPN provider (default) ----
-class EspnProvider implements WinsProvider {
+export class EspnProvider implements WinsProvider {
   name = "espn";
   async fetchWins(_: FetchOpts): Promise<WinsMap> {
     // Unofficial public JSON feed. Structure can change; code below is defensive.
