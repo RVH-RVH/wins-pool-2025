@@ -1,35 +1,28 @@
 
 
+import type { WinsMap, FetchOpts, WinsProvider } from "@/lib/wins/types";
 
-export type WinsMap = Record<string, number>;
-export type FetchOpts = { season?: number; week?: number };
-export interface WinsProvider { name: string; fetchWins(opts: FetchOpts): Promise<WinsMap>; }
-
-
-
-function normTeamId(id: string): string {
-  const up = (id || "").toUpperCase();
+function normalizeTeamKey(abbr: string): string | null {
+  if (!abbr) return null;
+  const up = abbr.toUpperCase();
   const ALIASES: Record<string, string> = {
     LAR: "LA",
     JAC: "JAX",
     WSH: "WAS",
     ARZ: "ARI",
-    OAK: "LV",
     SD:  "LAC",
+    OAK: "LV",
   };
   return ALIASES[up] ?? up;
 }
 
 async function getJson(url: string) {
-  const res = await fetch(url, { headers: { "User-Agent": "wins-pool/1.0" }, cache: "no-store" });
+  const res = await fetch(url, {
+    headers: { "User-Agent": "wins-pool/1.0" },
+    cache: "no-store",
+  });
   if (!res.ok) throw new Error(`ESPN ${res.status} for ${url}`);
   return res.json();
-}
-
-async function pullStandings(season: number, groupId: number) {
-  // core v2; 2=regular season; groups: AFC=8, NFC=9
-  const url = `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/${season}/types/2/groups/${groupId}/standings?level=2`;
-  return getJson(url);
 }
 
 export class EspnProvider implements WinsProvider {
@@ -38,96 +31,89 @@ export class EspnProvider implements WinsProvider {
   async fetchWins({ season }: FetchOpts): Promise<WinsMap> {
     const year = Number.isFinite(+season!) ? +season! : new Date().getFullYear();
 
-    const [afcRoot, nfcRoot] = await Promise.all([pullStandings(year, 8), pullStandings(year, 9)]);
+    // 1) Get the season’s team collection
+    // Example: https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/2025/teams
+    const teamsRoot = await getJson(
+      `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/${year}/teams`
+    );
 
-    const extract = async (doc: any) => {
-      const entriesUrl =
-        doc?.children?.find?.((c: any) => c?.rel?.includes?.("standingsEntries"))?.href ||
-        doc?.standings?.$ref || doc?.$ref || doc?.href;
-
-      const entriesDoc = entriesUrl ? await getJson(entriesUrl) : null;
-      const items: any[] = Array.isArray(entriesDoc?.items) ? entriesDoc.items : [];
-
-      const out: Array<{ id: string; wins: number }> = [];
-      for (const item of items) {
-        const entry = item?.$ref ? await getJson(item.$ref) : item;
-
-        let abbr = "";
-        try {
-          const teamDoc = entry?.team?.$ref ? await getJson(entry.team.$ref) : entry?.team;
-          abbr = teamDoc?.abbreviation || teamDoc?.shortDisplayName || teamDoc?.displayName || "";
-        } catch {}
-
-        const id = normTeamId(abbr || "");
-        if (!id) continue;
-
-        const stats: any[] = Array.isArray(entry?.stats) ? entry.stats : [];
-        let wins: number | undefined;
-
-        for (const s of stats) {
-          const name = String(s?.name ?? s?.type ?? "").toLowerCase();
-          if (name === "wins" || name === "overallwins" || name === "win") {
-            wins = Number(s?.value ?? s?.displayValue ?? s?.summary);
-            break;
-          }
-          if (!wins && typeof s?.displayValue === "string") {
-            const m = s.displayValue.match(/^(\d+)-/);
-            if (m) wins = Number(m[1]);
-          }
-        }
-
-        out.push({ id, wins: Math.max(0, Math.min(20, Number(wins ?? 0))) });
-      }
-      return out;
-    };
-
-    const [afc, nfc] = await Promise.all([extract(afcRoot), extract(nfcRoot)]);
-    const result: WinsMap = {};
-    for (const row of [...afc, ...nfc]) result[row.id] = row.wins;
-
-    return result; // <- caller (sync route) will name this `latest`
-  }
-}
-
-
-// ---- Optional paid provider (kept) ----
-class SportsDataIOProvider implements WinsProvider {
-  name = "sportsdataio";
-  async fetchWins({ season }: FetchOpts): Promise<WinsMap> {
-    const key = process.env.WINS_PROVIDER_API_KEY;
-    if (!key) throw new Error("WINS_PROVIDER_API_KEY missing");
-    const yr = Number.isFinite(+season!) ? +season! : new Date().getFullYear();
-    const url = `https://api.sportsdata.io/v3/nfl/scores/json/Standings/${yr}`;
-    const res = await fetch(url, { headers: { "Ocp-Apim-Subscription-Key": key } });
-    if (!res.ok) throw new Error(`SportsDataIO ${res.status}`);
-    const rows = (await res.json()) as Array<{ Key: string; Wins: number }>;
-    const out: WinsMap = {};
-    for (const r of rows) {
-   const ALIASES: Record<string,string> = { 
-  LAR:"LA", JAC:"JAX", WSH:"WAS", ARZ:"ARI", SD:"LAC", OAK:"LV" 
-};
-const id = ALIASES[r.Key] ?? r.Key;
-      if (id) out[id] = Math.max(0, Math.min(20, Number(r.Wins || 0)));
+    const teamItems: any[] = Array.isArray(teamsRoot?.items) ? teamsRoot.items : [];
+    if (!teamItems.length) {
+      console.warn("[ESPN] No teams returned for season", year);
+      return {};
     }
+
+    // 2) For each team, fetch its record for regular season (type=2)
+    // Example: team doc $ref -> has abbreviation
+    // Record endpoint pattern:
+    //   https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/${year}/types/2/teams/{teamId}/record
+    const CONCURRENCY = 8;
+    const chunks = Array.from({ length: Math.ceil(teamItems.length / CONCURRENCY) }, (_, i) =>
+      teamItems.slice(i * CONCURRENCY, (i + 1) * CONCURRENCY)
+    );
+
+    const out: WinsMap = {};
+
+    for (const chunk of chunks) {
+      const results = await Promise.all(
+        chunk.map(async (item) => {
+          try {
+            const teamDoc = item?.$ref ? await getJson(item.$ref) : item;
+            const teamId = teamDoc?.id; // numeric
+            const abbr =
+              teamDoc?.abbreviation ||
+              teamDoc?.shortDisplayName ||
+              teamDoc?.displayName ||
+              "";
+            const norm = normalizeTeamKey(abbr || "");
+            if (!norm) return null;
+
+            const recordUrl = `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/${year}/types/2/teams/${teamId}/record`;
+            const recordDoc = await getJson(recordUrl);
+
+            // recordDoc.items[0].stats -> look for wins
+            const recordItems: any[] = Array.isArray(recordDoc?.items)
+              ? recordDoc.items
+              : [];
+            let wins: number | undefined;
+
+            if (recordItems.length) {
+              // follow first item if it’s a $ref
+              const rec = recordItems[0]?.$ref
+                ? await getJson(recordItems[0].$ref)
+                : recordItems[0];
+
+              const stats: any[] = Array.isArray(rec?.stats) ? rec.stats : [];
+              for (const s of stats) {
+                const name = String(s?.name ?? s?.type ?? "").toLowerCase();
+                if (name === "wins" || name === "overallwins" || name === "win") {
+                  wins = Number(s?.value ?? s?.displayValue ?? s?.summary);
+                  break;
+                }
+                // Sometimes only a "10-7" style record is present:
+                if (!wins && typeof s?.displayValue === "string") {
+                  const m = s.displayValue.match(/^(\d+)-/);
+                  if (m) wins = Number(m[1]);
+                }
+              }
+            }
+
+            return { id: norm, wins: Math.max(0, Math.min(20, Number(wins ?? 0))) };
+          } catch (e) {
+            // swallow individual team errors so one bad team doesn't kill the whole fetch
+            return null;
+          }
+        })
+      );
+
+      for (const row of results) {
+        if (row && row.id) out[row.id] = row.wins ?? 0;
+      }
+    }
+
+    // Optional: log summary
+    // console.log("[ESPN] fetched teams:", Object.keys(out).length, "sample:", Object.entries(out).slice(0,5));
+
     return out;
-  }
-}
-
-// ---- Mock (kept for local testing) ----
-class MockProvider implements WinsProvider {
-  name = "mock";
-  async fetchWins(): Promise<WinsMap> {
-    return { KC: 11, SF: 12, DAL: 9, PHI: 10, BUF: 10, BAL: 11 };
-  }
-}
-
-// ---- Factory: default to ESPN ----
-export function getWinsProvider(): WinsProvider {
-  const p = (process.env.WINS_PROVIDER ?? "espn").toLowerCase();
-  switch (p) {
-    case "sportsdataio": return new SportsDataIOProvider();
-    case "mock": return new MockProvider();
-    case "espn":
-    default: return new EspnProvider();
   }
 }
