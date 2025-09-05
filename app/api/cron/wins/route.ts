@@ -1,9 +1,7 @@
-// app/api/cron/wins/route.ts
-
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic"; // <--- prevents build-time errors
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   const token = process.env.ADMIN_TOKEN;
@@ -19,9 +17,18 @@ export async function GET() {
       body: JSON.stringify({}),
     });
 
-    const json = await res.json().catch(() => ({}));
-    return NextResponse.json(json, { status: res.status });
+    let json: any;
+try {
+  json = await res.json();
+} catch (e) {
+  json = { error: 'Failed to parse JSON response', status: res.status };
+}
+
+console.log("Cron internal sync status:", res.status);
+console.log("Response body:", json);
+    return NextResponse.json({ ok: res.ok, json, status: res.status }, { status: res.status });
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err.message }, { status: 500 });
   }
+
 }
