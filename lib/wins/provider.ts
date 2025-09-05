@@ -9,22 +9,17 @@ const KNOWN_TEAMS = new Set([
   "ATL","CAR","NO","TB","ARI","LA","SF","SEA",
 ]);
 
-function normalizeTeamKey(raw: string): string | null {
-  const k = (raw || "").toUpperCase();
-  const map: Record<string, string> = {
-    WAS: "WAS", WSH: "WAS",
-    JAC: "JAX",
-    GB: "GB", GNB: "GB",
-    NE: "NE", NWE: "NE",
-    NO: "NO", NOR: "NO",
-    SF: "SF", SFO: "SF",
-    TB: "TB", TAM: "TB",
-    KC: "KC", KAN: "KC",
-    LA: "LA", LAR: "LA",
-    LV: "LV", OAK: "LV", LVR: "LV", PHI: "PHI",
+export function normalizeTeamKey(abbr: string): string | undefined {
+  const ESPN_TEAM_MAP: Record<string, string> = {
+    ARI: "ari", ATL: "atl", BAL: "bal", BUF: "buf", CAR: "car",
+    CHI: "chi", CIN: "cin", CLE: "cle", DAL: "dal", DEN: "den",
+    DET: "det", GB: "gb", HOU: "hou", IND: "ind", JAX: "jax",
+    KC: "kc", LV: "lv", LAC: "lac", LAR: "lar", MIA: "mia",
+    MIN: "min", NE: "ne", NO: "no", NYG: "nyg", NYJ: "nyj",
+    PHI: "phi", PIT: "pit", SF: "sf", SEA: "sea", TB: "tb",
+    TEN: "ten", WSH: "wsh",
   };
-  const v = map[k] ?? k;
-  return KNOWN_TEAMS.has(v) ? v : null;
+  return ESPN_TEAM_MAP[abbr?.toUpperCase()];
 }
 
 // ---- Free ESPN provider (default) ----
