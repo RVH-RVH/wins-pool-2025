@@ -22,73 +22,43 @@ export class EspnProvider implements WinsProvider {
   name = "espn";
 
   async fetchWins(_: FetchOpts): Promise<WinsMap> {
-    console.log("🌐 Fetching NFL standings from ESPN...");
-
-    const res = await fetch("https://site.api.espn.com/apis/site/v2/sports/football/nfl/standings", {
+    console.log("🌐 Fetching NFL scoreboard from ESPN...");
+    const res = await fetch("https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard", {
       headers: { "User-Agent": "wins-pool/1.0" },
       cache: "no-store",
     });
 
-    if (!res.ok) throw new Error(`ESPN error ${res.status}`);
-   const data = await res.json();
-console.log("📦 ESPN top-level keys:", Object.keys(data));
-console.dir(data, { depth: 2 });
+    if (!res.ok) throw new Error(`ESPN scoreboard error ${res.status}`);
 
-const out: WinsMap = {};
+    const json: any = await res.json();
+    const out: WinsMap = {};
 
-const groups: any[] =
-  Array.isArray(data?.children) ? data.children :
-  Array.isArray(data?.standings?.groups) ? data.standings.groups :
-  [];
-    console.log(`📊 Parsing ${groups.length} ESPN groups...`);
+    const events = json?.events ?? [];
+    console.log(`📊 Parsing ${events.length} ESPN events...`);
 
-    for (const g of groups) {
-      const entries = g?.standings?.entries || g?.entries || [];
-      for (const e of entries) {
-        const team = e?.team || {};
+    for (const event of events) {
+      const competitors = event?.competitions?.[0]?.competitors ?? [];
 
-        // Defensive extraction of abbreviation
-        const abbr =
-          team.abbreviation ||
-          team.abbrev ||
-          team.shortDisplayName ||
-          team.displayName ||
-          team.name ||
-          "";
-
+      for (const c of competitors) {
+        const abbr = c?.team?.abbreviation || "";
         const id = normalizeTeamKey(abbr);
-        if (!id) {
-          console.warn("⚠️ Unknown team abbreviation from ESPN:", abbr);
-          continue;
-        }
+        if (!id) continue;
 
-        // Try to extract wins
-        const stats = Array.isArray(e?.stats) ? e.stats :
-                      Array.isArray(team?.record?.items) ? team.record.items : [];
+        let wins = 0;
+        const records = c?.records ?? [];
 
-        let wins: number | undefined;
-
-        for (const s of stats) {
-          const name = (s?.name || s?.type || "").toString().toLowerCase();
-          if (name === "wins" || name === "overallwins" || name === "win") {
-            wins = Number(s?.value ?? s?.displayValue ?? s?.summary);
-            break;
-          }
-
-          // Parse "10-6" from display string
-          if (!wins && typeof s?.displayValue === "string" && s.displayValue.includes("-")) {
-            const m = s.displayValue.match(/^(\d+)-/);
-            if (m) wins = Number(m[1]);
+        for (const r of records) {
+          const summary = r?.summary;
+          if (typeof summary === "string" && summary.includes("-")) {
+            const match = summary.match(/^(\d+)-/);
+            if (match) {
+              wins = Number(match[1]);
+              break;
+            }
           }
         }
 
-        // Fallback to record string
-        if (wins == null && typeof e?.notes?.overall?.displayValue === "string") {
-          const m = e.notes.overall.displayValue.match(/^(\d+)-/);
-          if (m) wins = Number(m[1]);
-        }
-
-        out[id] = Math.max(0, Math.min(20, Number(wins ?? 0)));
+        out[id] = Math.max(out[id] ?? 0, wins); // Keep highest if seen multiple times
       }
     }
 
