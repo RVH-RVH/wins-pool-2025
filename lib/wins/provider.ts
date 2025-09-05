@@ -1,69 +1,91 @@
+
+
+
 export type WinsMap = Record<string, number>;
 export type FetchOpts = { season?: number; week?: number };
 export interface WinsProvider { name: string; fetchWins(opts: FetchOpts): Promise<WinsMap>; }
 
 
-// Hardcoded map from ESPN team abbreviations to internal 3-letter IDs
-const ESPN_TEAM_MAP: Record<string, string> = {
-  ARI: "ari", ATL: "atl", BAL: "bal", BUF: "buf", CAR: "car",
-  CHI: "chi", CIN: "cin", CLE: "cle", DAL: "dal", DEN: "den",
-  DET: "det", GB: "gb", HOU: "hou", IND: "ind", JAX: "jax",
-  KC: "kc", LV: "lv", LAC: "lac", LAR: "lar", MIA: "mia",
-  MIN: "min", NE: "ne", NO: "no", NYG: "nyg", NYJ: "nyj",
-  PHI: "phi", PIT: "pit", SF: "sf", SEA: "sea", TB: "tb",
-  TEN: "ten", WSH: "wsh",
-};
 
-function normalizeTeamKey(abbr: string): string | undefined {
-  return ESPN_TEAM_MAP[abbr?.toUpperCase()];
+function normTeamId(id: string): string {
+  const up = (id || "").toUpperCase();
+  const ALIASES: Record<string, string> = {
+    LAR: "LA",
+    JAC: "JAX",
+    WSH: "WAS",
+    ARZ: "ARI",
+    OAK: "LV",
+    SD:  "LAC",
+  };
+  return ALIASES[up] ?? up;
+}
+
+async function getJson(url: string) {
+  const res = await fetch(url, { headers: { "User-Agent": "wins-pool/1.0" }, cache: "no-store" });
+  if (!res.ok) throw new Error(`ESPN ${res.status} for ${url}`);
+  return res.json();
+}
+
+async function pullStandings(season: number, groupId: number) {
+  // core v2; 2=regular season; groups: AFC=8, NFC=9
+  const url = `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/${season}/types/2/groups/${groupId}/standings?level=2`;
+  return getJson(url);
 }
 
 export class EspnProvider implements WinsProvider {
   name = "espn";
 
-  async fetchWins(_: FetchOpts): Promise<WinsMap> {
-    console.log("🌐 Fetching NFL scoreboard from ESPN...");
-    const res = await fetch("https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard", {
-      headers: { "User-Agent": "wins-pool/1.0" },
-      cache: "no-store",
-    });
+  async fetchWins({ season }: FetchOpts): Promise<WinsMap> {
+    const year = Number.isFinite(+season!) ? +season! : new Date().getFullYear();
 
-    if (!res.ok) throw new Error(`ESPN scoreboard error ${res.status}`);
+    const [afcRoot, nfcRoot] = await Promise.all([pullStandings(year, 8), pullStandings(year, 9)]);
 
-    const json: any = await res.json();
-    const out: WinsMap = {};
+    const extract = async (doc: any) => {
+      const entriesUrl =
+        doc?.children?.find?.((c: any) => c?.rel?.includes?.("standingsEntries"))?.href ||
+        doc?.standings?.$ref || doc?.$ref || doc?.href;
 
-    const events = json?.events ?? [];
-    console.log(`📊 Parsing ${events.length} ESPN events...`);
+      const entriesDoc = entriesUrl ? await getJson(entriesUrl) : null;
+      const items: any[] = Array.isArray(entriesDoc?.items) ? entriesDoc.items : [];
 
-    for (const event of events) {
-      const competitors = event?.competitions?.[0]?.competitors ?? [];
+      const out: Array<{ id: string; wins: number }> = [];
+      for (const item of items) {
+        const entry = item?.$ref ? await getJson(item.$ref) : item;
 
-      for (const c of competitors) {
-        const abbr = c?.team?.abbreviation || "";
-        const id = normalizeTeamKey(abbr);
+        let abbr = "";
+        try {
+          const teamDoc = entry?.team?.$ref ? await getJson(entry.team.$ref) : entry?.team;
+          abbr = teamDoc?.abbreviation || teamDoc?.shortDisplayName || teamDoc?.displayName || "";
+        } catch {}
+
+        const id = normTeamId(abbr || "");
         if (!id) continue;
 
-        let wins = 0;
-        const records = c?.records ?? [];
+        const stats: any[] = Array.isArray(entry?.stats) ? entry.stats : [];
+        let wins: number | undefined;
 
-        for (const r of records) {
-          const summary = r?.summary;
-          if (typeof summary === "string" && summary.includes("-")) {
-            const match = summary.match(/^(\d+)-/);
-            if (match) {
-              wins = Number(match[1]);
-              break;
-            }
+        for (const s of stats) {
+          const name = String(s?.name ?? s?.type ?? "").toLowerCase();
+          if (name === "wins" || name === "overallwins" || name === "win") {
+            wins = Number(s?.value ?? s?.displayValue ?? s?.summary);
+            break;
+          }
+          if (!wins && typeof s?.displayValue === "string") {
+            const m = s.displayValue.match(/^(\d+)-/);
+            if (m) wins = Number(m[1]);
           }
         }
 
-        out[id] = Math.max(out[id] ?? 0, wins); // Keep highest if seen multiple times
+        out.push({ id, wins: Math.max(0, Math.min(20, Number(wins ?? 0))) });
       }
-    }
+      return out;
+    };
 
-    console.log("✅ Fetched win totals:", out);
-    return out;
+    const [afc, nfc] = await Promise.all([extract(afcRoot), extract(nfcRoot)]);
+    const result: WinsMap = {};
+    for (const row of [...afc, ...nfc]) result[row.id] = row.wins;
+
+    return result; // <- caller (sync route) will name this `latest`
   }
 }
 
@@ -81,7 +103,10 @@ class SportsDataIOProvider implements WinsProvider {
     const rows = (await res.json()) as Array<{ Key: string; Wins: number }>;
     const out: WinsMap = {};
     for (const r of rows) {
-      const id = normalizeTeamKey(r.Key);
+   const ALIASES: Record<string,string> = { 
+  LAR:"LA", JAC:"JAX", WSH:"WAS", ARZ:"ARI", SD:"LAC", OAK:"LV" 
+};
+const id = ALIASES[r.Key] ?? r.Key;
       if (id) out[id] = Math.max(0, Math.min(20, Number(r.Wins || 0)));
     }
     return out;
