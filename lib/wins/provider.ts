@@ -1,6 +1,12 @@
 
 
-import type { WinsMap, FetchOpts, WinsProvider } from "@/lib/wins/types";
+
+export type WinsMap = Record<string, number>;
+export type FetchOpts = { season?: number; week?: number };
+export interface WinsProvider {
+  name: string;
+  fetchWins(opts: FetchOpts): Promise<WinsMap>;
+}
 
 function normalizeTeamKey(abbr: string): string | null {
   if (!abbr) return null;
