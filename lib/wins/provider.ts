@@ -57,7 +57,48 @@ async function fetchAllItems(url: string) {
   }
   return items;
 }
+async function fetchAllV2Items(url: string) {
+  const items: any[] = [];
+  // ask nicely for more per page; ESPN ignores it sometimes but often honors it
+  const base = url.includes("?") ? `${url}&limit=1000` : `${url}?limit=1000`;
+  let nextUrl: string | null = base;
+  let guard = 0;
 
+  while (nextUrl && guard++ < 20) {
+    const doc = await getJson(nextUrl);
+    const batch: any[] = Array.isArray(doc?.items) ? doc.items : [];
+    items.push(...batch);
+
+    // Prefer HAL-style "next" link if present
+    const linkNext = Array.isArray(doc?.links)
+      ? doc.links.find((l: any) => Array.isArray(l?.rel) ? l.rel.includes("next") : l?.rel === "next")
+      : null;
+
+    if (linkNext?.href) {
+      nextUrl = linkNext.href;
+      continue;
+    }
+
+    // Fallback to pageCount/pageIndex if available
+    const pageIndex = Number(doc?.pageIndex ?? 0);   // 1-based or 0-based varies; we’ll compute conservatively
+    const pageCount = Number(doc?.pageCount ?? 1);
+
+    // If there are more pages but no link, try incrementing `page`
+    if (pageCount && pageIndex && pageIndex < pageCount) {
+      const sep = base.includes("?") ? "&" : "?";
+      nextUrl = `${base}${sep}page=${pageIndex + 1}`;
+    } else if (pageCount && !pageIndex && items.length && batch.length === 25) {
+      // Some docs omit pageIndex; keep going until we get <25 items
+      const currentPage = (items.length / 25) + 1;
+      const sep = base.includes("?") ? "&" : "?";
+      nextUrl = `${base}${sep}page=${currentPage}`;
+    } else {
+      nextUrl = null;
+    }
+  }
+
+  return items;
+}
 
 export class EspnProvider implements WinsProvider {
   name = "espn";
@@ -65,7 +106,13 @@ export class EspnProvider implements WinsProvider {
   async fetchWins({ season }: FetchOpts): Promise<WinsMap> {
     const year = Number.isFinite(+season!) ? +season! : new Date().getFullYear();
 
-        const teamsUrl = `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/${year}/teams`;
+        // 🟢 GET ALL TEAMS (not just first 25)
+    const teamsUrl = `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/${year}/teams`;
+    const teamItems: any[] = await fetchAllV2Items(teamsUrl);
+
+    console.log("[ESPN] teams fetched:", teamItems.length); // expect 32
+
+    
   
     // 1) Get the season’s team collection
     // Example: https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/2025/teams
@@ -73,7 +120,7 @@ export class EspnProvider implements WinsProvider {
       `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/${year}/teams`
     );
 
-    const teamItems: any[] = Array.isArray(teamsRoot?.items) ? teamsRoot.items : [];
+ 
     if (!teamItems.length) {
       console.warn("[ESPN] No teams returned for season", year);
       return {};
