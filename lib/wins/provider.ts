@@ -17,6 +17,7 @@ export interface WinsProvider {
   fetchWins(opts: FetchOpts): Promise<WinsMap>;
 }
 
+
 function normalizeTeamKey(abbr: string): string | null {
   if (!abbr) return null;
   const up = abbr.toUpperCase();
@@ -39,6 +40,24 @@ async function getJson(url: string) {
   if (!res.ok) throw new Error(`ESPN ${res.status} for ${url}`);
   return res.json();
 }
+// 🟢 NEW: fetch all pages from a v2 collection
+async function fetchAllItems(url: string) {
+  const items: any[] = [];
+  let page = 1;
+  // add page=… until pageCount reached (25 per page typical)
+  // works whether or not the URL already has a query string
+  for (;;) {
+    const sep = url.includes("?") ? "&" : "?";
+    const doc = await getJson(`${url}${sep}page=${page}`);
+    const batch: any[] = Array.isArray(doc?.items) ? doc.items : [];
+    items.push(...batch);
+    const pageCount = Number(doc?.pageCount ?? 1);
+    if (page >= pageCount || batch.length === 0) break;
+    page++;
+  }
+  return items;
+}
+
 
 export class EspnProvider implements WinsProvider {
   name = "espn";
@@ -46,6 +65,8 @@ export class EspnProvider implements WinsProvider {
   async fetchWins({ season }: FetchOpts): Promise<WinsMap> {
     const year = Number.isFinite(+season!) ? +season! : new Date().getFullYear();
 
+        const teamsUrl = `https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/${year}/teams`;
+  
     // 1) Get the season’s team collection
     // Example: https://sports.core.api.espn.com/v2/sports/football/leagues/nfl/seasons/2025/teams
     const teamsRoot = await getJson(
