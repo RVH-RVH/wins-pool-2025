@@ -152,6 +152,8 @@ function serializeForServer(state: PoolState, playerRowIds: string[]) {
   const picks = state.picks.map(p => ({
     teamId: p.teamId, playerId: map.get(p.playerId) || playerRowIds[0], pickNumber: p.pickNumber
   }));
+  
+  
   return {
     leagueName: state.leagueName,
     teamsPerPlayer: state.teamsPerPlayer,

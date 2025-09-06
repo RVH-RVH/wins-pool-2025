@@ -56,7 +56,20 @@ export async function POST(req: Request) {
     .filter(([teamId]) => KNOWN.has(teamId))
     .map(([teamId, wins]) => ({ teamId, wins: Math.max(0, Math.min(20, Number(wins) || 0)) }));
 
-  if (process.env.WINS_AUTO_SYNC_DRY_RUN === "true") {
+// after: const updates = [...]
+if (!updates.length) {
+  console.warn("[CRON] No updates computed — skipping write");
+  return NextResponse.json({ ok:false, error:"no-updates", count: 0 });
+}
+
+// 1) Skip if all zeros (preseason/temporary outage)
+const nonZero = updates.some(u => u.wins > 0);
+if (!nonZero) {
+  console.warn("[CRON] All wins are zero; skipping DB write to avoid clobber.");
+  return NextResponse.json({ ok:false, error:"all-zero-skip", count: updates.length });
+}
+
+    if (process.env.WINS_AUTO_SYNC_DRY_RUN === "true") {
     return NextResponse.json({ ok:true, dryRun:true, count:updates.length, updates });
   }
 

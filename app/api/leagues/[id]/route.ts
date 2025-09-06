@@ -188,7 +188,23 @@ console.log("[PATCH] /api/leagues/%s env", key, envFingerprint());
           });
         }
       }
-
+if (incomingWins && typeof incomingWins === "object") {
+  const entries = Object.entries(incomingWins as Record<string, number>);
+  const hasAnyNonZero = entries.some(([, v]) => Number(v) > 0);
+  if (!hasAnyNonZero) {
+    // Ignore all-zero client payload to prevent clobbering
+    console.warn("[PATCH league] teamWins all zero — ignoring");
+  } else {
+    for (const [teamId, wins] of entries) {
+      const val = Number.isFinite(+wins) ? Math.max(0, Math.min(20, +wins)) : 0;
+      await tx.teamWin.upsert({
+        where: { leagueId_teamId: { leagueId, teamId } },
+        update: { wins: val },
+        create: { leagueId, teamId, wins: val },
+      });
+    }
+  }
+}
       return {
         ok: true,
         updatedLeagueId: leagueId,
