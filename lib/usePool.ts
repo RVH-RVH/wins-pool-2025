@@ -1,3 +1,4 @@
+// lib/usePool.ts
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { defaultState, loadState, saveState, type PoolState } from "@/lib/state";
@@ -32,101 +33,115 @@ export function usePool() {
 
   const [state, setState] = useState<PoolState>(() => defaultState());
   const [playerIds, setPlayerIds] = useState<string[]>([]);
- const [hydrated, setHydrated] = useState(false);
-const [bootstrapped, setBootstrapped] = useState(false);
-const suppressSaveRef = useRef(false);
+  const [hydrated, setHydrated] = useState(false);
+
+  // guards to prevent clobbering writes
   const savingRef = useRef(false);
-// load from server
-useEffect(() => {
-  if (!isServerMode) return;
-  let ignore = false;
-  suppressSaveRef.current = true;
-  fetchLeague(leagueId!).then((data) => {
-    if (ignore) return;
-    const sorted = [...data.players].sort((a,b) => a.order - b.order);
-    const newState: PoolState = {
-      leagueName: data.league.name,
-      players: sorted.map((p, i) => ({ id: `P${i+1}`, name: p.name })),
-      teamsPerPlayer: data.league.teamsPerPlayer,
-      picks: data.picks.map(p => ({ teamId: p.teamId, playerId: mapPlayerId(sorted, p.playerId), pickNumber: p.pickNumber })),
-      snake: data.league.snake,
-      teamWins: fillWins(data.teamWins),
-    };
-    setState(newState);
-    setPlayerIds(sorted.map(p => p.id));
-  }).catch(console.error).finally(() => {
-    suppressSaveRef.current = false;
-    setBootstrapped(true);
-  });
-  return () => { ignore = true; };
-}, [isServerMode, leagueId]);
+  const bootstrappedRef = useRef(false);
+  const suppressSaveRef = useRef(false);
 
-// SSE: suppress autosave while applying server-pushed changes
-useEffect(() => {
-  if (!isServerMode || !leagueId) return;
-  const es = new EventSource(`/api/leagues/${leagueId}/events`);
-  let timer: any;
-  es.onmessage = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => {
-      suppressSaveRef.current = true;
-      fetchLeague(leagueId).then(data => {
-        const sorted = [...data.players].sort((a,b) => a.order - b.order);
-        const newState: PoolState = {
-          leagueName: data.league.name,
-          players: sorted.map((p, i) => ({ id: `P${i+1}`, name: p.name })),
-          teamsPerPlayer: data.league.teamsPerPlayer,
-          picks: data.picks.map(p => ({ teamId: p.teamId, playerId: mapPlayerId(sorted, p.playerId), pickNumber: p.pickNumber })),
-          snake: data.league.snake,
-          teamWins: fillWins(data.teamWins),
-        };
-        setState(newState);
-        setPlayerIds(sorted.map(p => p.id));
-      }).catch(console.error).finally(() => {
-        // small delay so dependent effects settle before autosave can run
-        setTimeout(() => { suppressSaveRef.current = false; }, 50);
-      });
-    }, 250);
-  };
-  es.onerror = () => {};
-  return () => { try { es.close(); } catch {} };
-}, [isServerMode, leagueId]);
+  // mount
+  useEffect(() => { setHydrated(true); }, []);
 
-// AUTOSAVE: only after bootstrapped, and never while suppressed
-useEffect(() => {
-  if (!isServerMode) return;
-  if (!bootstrapped) return;
-  if (suppressSaveRef.current) return;
-  // also: don't autosave if we don't have player row IDs yet
-  if (playerIds.length === 0 || state.players.length === 0) return;
+  // local-mode: load from localStorage once hydrated
+  useEffect(() => {
+    if (!isServerMode && hydrated) {
+      const saved = loadState();
+      if (saved) setState(saved);
+    }
+  }, [isServerMode, hydrated]);
 
-  const t = setTimeout(() => {
-    if (suppressSaveRef.current) return;
-    if (savingRef.current) return;
-    savingRef.current = true;
-    const payload = serializeForServer(state, playerIds);
-    saveLeague(leagueId!, payload).catch(console.error).finally(() => { savingRef.current = false; });
-  }, 600);
-  return () => clearTimeout(t);
-}, [isServerMode, leagueId, state, playerIds, bootstrapped]);
-// Local mode: persist to localStorage
-useEffect(() => {
-  if (!isServerMode) saveState(state);
-}, [isServerMode, state]);
-  // Save to server on state changes (debounced)
+  // server-mode: initial fetch
   useEffect(() => {
     if (!isServerMode) return;
+    let ignore = false;
+
+    fetchLeague(leagueId!).then((data) => {
+      if (ignore) return;
+
+      const sorted = [...data.players].sort((a, b) => a.order - b.order);
+      const newState: PoolState = {
+        leagueName: data.league.name,
+        players: sorted.map((p, i) => ({ id: `P${i + 1}`, name: p.name })),
+        teamsPerPlayer: data.league.teamsPerPlayer,
+        picks: data.picks.map(p => ({
+          teamId: p.teamId,
+          playerId: mapPlayerId(sorted, p.playerId),
+          pickNumber: p.pickNumber,
+        })),
+        snake: data.league.snake,
+        teamWins: fillWins(data.teamWins),
+      };
+      setState(newState);
+      setPlayerIds(sorted.map(p => p.id));
+      bootstrappedRef.current = true; // prevent autosave until after first render
+    }).catch(console.error);
+
+    return () => { ignore = true; };
+  }, [isServerMode, leagueId]);
+
+  // SSE: live updates (throttled) — suppress autosave when applying server data
+  useEffect(() => {
+    if (!isServerMode || !leagueId) return;
+    const es = new EventSource(`/api/leagues/${leagueId}/events`);
+    let timer: any;
+
+    es.onmessage = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        suppressSaveRef.current = true;
+        fetchLeague(leagueId).then(data => {
+          const sorted = [...data.players].sort((a, b) => a.order - b.order);
+          const newState: PoolState = {
+            leagueName: data.league.name,
+            players: sorted.map((p, i) => ({ id: `P${i + 1}`, name: p.name })),
+            teamsPerPlayer: data.league.teamsPerPlayer,
+            picks: data.picks.map(p => ({
+              teamId: p.teamId,
+              playerId: mapPlayerId(sorted, p.playerId),
+              pickNumber: p.pickNumber,
+            })),
+            snake: data.league.snake,
+            teamWins: fillWins(data.teamWins),
+          };
+          setState(newState);
+          setPlayerIds(sorted.map(p => p.id));
+        }).catch(console.error).finally(() => {
+          // allow autosave again on next change tick
+          setTimeout(() => { suppressSaveRef.current = false; }, 0);
+        });
+      }, 250);
+    };
+    es.onerror = () => { /* let browser handle reconnect */ };
+
+    return () => { try { es.close(); } catch {} };
+  }, [isServerMode, leagueId]);
+
+  // local mode: persist to localStorage
+  useEffect(() => {
+    if (!isServerMode && hydrated) saveState(state);
+  }, [isServerMode, hydrated, state]);
+
+  // server mode: debounced autosave — never send teamWins from client
+  useEffect(() => {
+    if (!isServerMode) return;
+    if (!bootstrappedRef.current) return;      // wait until initial GET is applied
+    if (suppressSaveRef.current) return;       // ignore saves triggered by server pushes
+
     const t = setTimeout(() => {
       if (savingRef.current) return;
       savingRef.current = true;
-      const payload = serializeForServer(state, playerIds);
-      saveLeague(leagueId!, payload).catch(console.error).finally(() => { savingRef.current = false; });
+      const payload = serializeForServer(state, playerIds, /* isServerMode */ true);
+      saveLeague(leagueId!, payload)
+        .catch(console.error)
+        .finally(() => { savingRef.current = false; });
     }, 600);
     return () => clearTimeout(t);
   }, [isServerMode, leagueId, state, playerIds]);
 
   const teamMap = useMemo(() => Object.fromEntries(NFL_TEAMS.map(t => [t.id, t])), []);
   const takenTeamIds = useMemo(() => new Set(state.picks.map(p => p.teamId)), [state.picks]);
+
   return { state, setState, teamMap, takenTeamIds };
 }
 
@@ -136,30 +151,45 @@ function fillWins(serverWins: Record<string, number>) {
   return base;
 }
 
-function mapPlayerId(sortedPlayers: {id: string}[], playerId: string) {
+function mapPlayerId(sortedPlayers: { id: string }[], playerId: string) {
   const idx = sortedPlayers.findIndex(p => p.id === playerId);
-  return idx >= 0 ? `P${idx+1}` : "P1";
+  return idx >= 0 ? `P${idx + 1}` : "P1";
 }
 
-function serializeForServer(state: PoolState, playerRowIds: string[]) {
+// NOTE: in server mode we OMIT teamWins from payload to avoid clobbering DB;
+// in local mode we include it so local drafts still work.
+function serializeForServer(
+  state: PoolState,
+  playerRowIds: string[],
+  isServerMode = false
+) {
   // players by order
   const players = state.players.map((p, i) => ({
-    name: p.name, order: i, id: playerRowIds[i] ?? undefined
+    name: p.name,
+    order: i,
+    id: playerRowIds[i] ?? undefined,
   }));
-  // picks need mapping from P# -> db player id
+
+  // picks: map P# -> db player id
   const map = new Map<string, string>();
-  state.players.forEach((_, i) => map.set(`P${i+1}`, playerRowIds[i] ?? ""));
+  state.players.forEach((_, i) => map.set(`P${i + 1}`, playerRowIds[i] ?? ""));
   const picks = state.picks.map(p => ({
-    teamId: p.teamId, playerId: map.get(p.playerId) || playerRowIds[0], pickNumber: p.pickNumber
+    teamId: p.teamId,
+    playerId: map.get(p.playerId) || playerRowIds[0],
+    pickNumber: p.pickNumber,
   }));
-  
-  
-  return {
+
+  const payload: any = {
     leagueName: state.leagueName,
     teamsPerPlayer: state.teamsPerPlayer,
     snake: state.snake,
     players,
     picks,
-    teamWins: state.teamWins,
   };
+
+  if (!isServerMode) {
+    payload.teamWins = state.teamWins; // only persist wins locally
+  }
+
+  return payload;
 }

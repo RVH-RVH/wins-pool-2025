@@ -77,7 +77,18 @@ if (!nonZero) {
   let updated = 0, created = 0, failed = 0;
 
   for (const { id } of leagues) {
+    // Fetch current wins for this league and build a map
+    const currentWins = await prisma.teamWin.findMany({
+      where: { leagueId: id },
+      select: { teamId: true, wins: true }
+    });
+    const curMap = new Map(currentWins.map(tw => [tw.teamId, tw.wins]));
+
     for (const { teamId, wins } of updates) {
+     
+      const prev = curMap.get(teamId) ?? 0;
+      if (wins <= prev) continue; // don't regress or rewrite same value
+    
       try {
         await prisma.teamWin.update({
           where: { leagueId_teamId: { leagueId: id, teamId } },
